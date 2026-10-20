@@ -1,0 +1,14 @@
+{
+  "appId": "br.com.lilianruffino.financas",
+  "appName": "Ruffino Finanças",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#0F1012"
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css",
+      "style": "DARK"
+    }
+  }
+}
