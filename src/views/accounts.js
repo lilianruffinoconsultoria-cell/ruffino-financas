@@ -148,6 +148,7 @@ export function renderCards() {
     ${scopeChips()}
     ${best ? `<div class="best-card">${icon('star', 18)}<span>O melhor cartão para comprar hoje é o <b>${esc(best.card.name)}</b>: a compra só vence em <b>${best.days} dias</b> (${shortDate(invoiceDueDate(best.card, currentInvoice(best.card)))}).</span></div>` : ''}
     ${list.length ? `<div class="grid">${list.map(cardTile).join('')}</div>` : `<article class="card">${empty('credit-card', 'Nenhum cartão', 'Cadastre seus cartões para acompanhar faturas e limite disponível.')}</article>`}
+    <a class="menu-item" href="#/parcelamentos"><span class="menu-ic">${icon('layers', 22)}</span><span><b>Compras parceladas</b><small>Parcelas pagas, total e quanto falta de cada compra</small></span>${icon('chevron-right', 18, 'muted')}</a>
     ${archived.length ? `<details class="card"><summary class="card-head"><h2>Arquivados (${archived.length})</h2></summary><div class="grid">${archived.map(cardTile).join('')}</div></details>` : ''}
   </section>`;
 }

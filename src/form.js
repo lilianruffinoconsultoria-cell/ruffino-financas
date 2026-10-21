@@ -113,8 +113,14 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
           : ''
         : `<div class="row2">
             <label class="field"><span>Repetir</span>
-              <select name="repeat"><option value="none">Não repete</option><option value="fixed">Fixa (todo mês)</option>${kind === 'transfer' ? '' : '<option value="installments">Parcelada</option>'}</select></label>
-            <label class="field" data-times hidden><span>Nº de parcelas</span><input name="times" type="number" min="2" max="72" value="2" inputmode="numeric"></label>
+              <select name="repeat"><option value="none">Não repete</option><option value="fixed">Fixa (todo mês)</option>${kind === 'transfer' ? '' : `<option value="installments" ${preset.repeat === 'installments' ? 'selected' : ''}>Parcelada</option>`}</select></label>
+            <label class="field" data-times ${preset.repeat === 'installments' ? '' : 'hidden'}><span>Nº de parcelas</span><input name="times" type="number" min="2" max="420" value="${preset.times || 2}" inputmode="numeric"></label>
+          </div>
+          <div class="installment-opts" data-inst-opts ${preset.repeat === 'installments' ? '' : 'hidden'}>
+            <label class="field"><span>O valor informado é</span><select name="amountMode"><option value="total">O total da compra</option><option value="per">O valor de cada parcela</option></select></label>
+            ${kind === 'card' ? '<p class="hint">No cartão, cada parcela entra numa fatura e conta como paga quando a fatura é paga ou vence.</p>' : `<label class="field"><span>Parcelas já pagas <small>(compra em andamento)</small></span><input name="alreadyPaid" type="number" min="0" max="419" value="0" inputmode="numeric"></label>
+            <p class="hint">Compra já em andamento? Use a data da <b>1ª parcela</b> e informe quantas já pagou.</p>`}
+            <p class="hint" data-inst-preview></p>
           </div>`
     }
 
@@ -164,7 +170,24 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
       );
 
       const repeat = form.querySelector('[name=repeat]');
-      repeat?.addEventListener('change', () => (form.querySelector('[data-times]').hidden = repeat.value !== 'installments'));
+      const instOpts = form.querySelector('[data-inst-opts]');
+      const preview = form.querySelector('[data-inst-preview]');
+      const updatePreview = () => {
+        if (!preview || repeat.value !== 'installments') return;
+        const n = Math.max(2, Number(form.times.value) || 2);
+        const v = parseMoney(form.amount.value);
+        const per = form.amountMode.value === 'per';
+        const paid = Math.min(n, Number(form.alreadyPaid?.value) || 0);
+        preview.innerHTML = v ? `${n}× de <b>${money(per ? v : v / n)}</b> · total <b>${money(per ? v * n : v)}</b>${paid ? ` · ${paid} paga(s), faltam ${money((per ? v : v / n) * (n - paid))}` : ''}` : '';
+      };
+      repeat?.addEventListener('change', () => {
+        form.querySelector('[data-times]').hidden = repeat.value !== 'installments';
+        instOpts.hidden = repeat.value !== 'installments';
+        updatePreview();
+      });
+      ['times', 'amountMode', 'alreadyPaid', 'amount'].forEach((n) => form[n]?.addEventListener('input', updatePreview));
+      form.amountMode?.addEventListener('change', updatePreview);
+      updatePreview();
 
       // subcategorias da categoria escolhida
       const subWrap = form.querySelector('[data-sub]');
@@ -282,9 +305,10 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
           toast('Lançamento atualizado.');
         } else {
           const rep = form.repeat?.value || 'none';
-          const times = Number(form.times?.value) || 2;
-          addTransaction(data, rep, times);
-          toast(rep === 'installments' ? `Lançado em ${times}x.` : rep === 'fixed' ? 'Lançamento fixo criado.' : 'Lançamento salvo.');
+          const times = Math.max(2, Number(form.times?.value) || 2);
+          const alreadyPaid = Math.min(times, Math.max(0, Number(form.alreadyPaid?.value) || 0));
+          addTransaction(data, rep, times, { alreadyPaid: rep === 'installments' ? alreadyPaid : 0, perInstallment: rep === 'installments' && form.amountMode?.value === 'per' });
+          toast(rep === 'installments' ? `Compra parcelada em ${times}x criada.` : rep === 'fixed' ? 'Lançamento fixo criado.' : 'Lançamento salvo.');
         }
         closeSheet();
         rerender();

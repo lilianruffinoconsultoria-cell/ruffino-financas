@@ -397,3 +397,21 @@ label.chip{cursor:pointer}
 .cal-cell .dot-pend{position:absolute;top:5px;right:5px}
 .cal .legend-inline{margin-top:10px;flex-wrap:wrap}
 @media (min-width:700px){.cal-cell{min-height:72px}.cal-cell i{font-size:11px}}
+
+/* ---------- compras parceladas ---------- */
+.inst-count{display:flex;flex-direction:column;align-items:flex-end;line-height:1.15}
+.inst-count b{font-family:var(--display);font-size:17px;color:var(--accent)}
+.inst-count small{color:var(--meta);font-size:11px}
+.inst-nums{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;font-variant-numeric:tabular-nums}
+.inst-nums span{display:flex;flex-direction:column;min-width:0}
+.inst-nums small{color:var(--meta);font-size:11.5px}
+.inst-nums b{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inst-nums.big{padding:12px;border-radius:12px;background:var(--surface-2)}
+.inst-nums.big b{font-family:var(--display);font-size:16px}
+.grow small .ic{display:inline-block;vertical-align:-1px}
+.inst-list{max-height:46dvh;overflow:auto}
+.inst-n{width:30px;height:30px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:12.5px;font-weight:700;background:var(--surface-3);color:var(--muted)}
+.inst-n.ok{background:color-mix(in srgb,var(--pos) 18%,transparent);color:var(--pos)}
+.inst-n.late{background:color-mix(in srgb,var(--neg) 18%,transparent);color:var(--neg)}
+.quick small{font-size:11.5px;font-weight:500;text-align:center;line-height:1.3}
+.installment-opts{display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:12px;border:1px dashed var(--line-input)}

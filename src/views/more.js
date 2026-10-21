@@ -8,6 +8,7 @@ import { applyTheme } from '../theme.js';
 const MENU = [
   ['#/contas', 'landmark', 'Contas', 'Saldos, reajuste, arquivar e mover lançamentos'],
   ['#/cartoes', 'credit-card', 'Cartões de crédito', 'Faturas, estorno, antecipação e melhor cartão'],
+  ['#/parcelamentos', 'layers', 'Compras parceladas', 'Carnês, crediários e parcelas no cartão: pagas e quanto falta'],
   ['#/objetivos', 'target', 'Objetivos', 'Metas de economia com prazo'],
   ['#/relatorios', 'chart-column', 'Relatórios', 'DRE do mês, comparativos e evolução'],
   ['#/calendario', 'calendar', 'Calendário', 'Receitas, despesas e pendências por dia'],

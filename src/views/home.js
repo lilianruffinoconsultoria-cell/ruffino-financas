@@ -1,7 +1,7 @@
 // Tela inicial: saldo geral, resumo do mês, contas, cartões, categorias, pendências, metas e dica.
 import {
   S, accountsIn, cardsIn, accountBalance, totalBalance, monthSummary, byCategory, currentInvoice, invoiceTotal, invoiceDueDate,
-  cardUsed, pendingUntil, goalSaved, spentInCategory, ACCOUNT_ICONS, category, budgetFor, bestCard,
+  cardUsed, pendingUntil, goalSaved, spentInCategory, ACCOUNT_ICONS, category, budgetFor, bestCard, installmentGroups,
 } from '../store.js';
 import { esc, icon, monthEnd, monthLabel, shortDate, today } from '../util.js';
 import { UI, $m, monthSwitcher, scopeChips, donut, progress, catBadge, empty } from '../ui.js';
@@ -29,6 +29,8 @@ export function renderHome() {
   const planned = plan.total || budgetIds.reduce((a, id) => a + plan.cats[id], 0);
   const plannedSpent = plan.total ? sum.expense : budgetIds.reduce((a, id) => a + spentInCategory(id, ym, sc), 0);
   const best = bestCard(sc);
+  const inst = installmentGroups(sc).filter((g) => !g.done).sort((a, b) => b.remaining - a.remaining);
+  const instLeft = inst.reduce((a, g) => a + g.remaining, 0);
   const tip = TIPS[(new Date().getDate() + new Date().getMonth()) % TIPS.length];
 
   return `
@@ -112,6 +114,13 @@ export function renderHome() {
         }).join('')}</ul>`
           : empty('circle-check', 'Tudo em dia', 'Nenhuma conta a pagar ou receber pendente.')}
       </article>
+
+      ${inst.length ? `<article class="card">
+        <header class="card-head"><h2>Compras parceladas</h2><a href="#/parcelamentos" class="link">Ver todas</a></header>
+        <div class="plan-sum"><div><small>Falta pagar (${inst.length} compras)</small><b>${$m(instLeft)}</b></div></div>
+        <ul class="list compact">${inst.slice(0, 3).map((g) => `<li><a class="row col" href="#/parcelamentos"><div class="row-in">${catBadge(category(g.categoryId), 30)}
+          <span class="grow"><b>${esc(g.desc)}</b><small>${g.paidCount}/${g.n} pagas · falta ${$m(g.remaining)}${g.cardId ? ' · cartão' : ''}</small></span></div>${progress(g.paidValue, g.total, { warn: 2 })}</a></li>`).join('')}</ul>
+      </article>` : ''}
 
       <article class="card">
         <header class="card-head"><h2>Objetivos</h2><a href="#/objetivos" class="link">Ver todos</a></header>

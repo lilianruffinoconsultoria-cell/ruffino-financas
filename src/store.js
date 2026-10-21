@@ -323,25 +323,29 @@ export function editableBudget(ym) {
 /**
  * Cria uma transação. `repeat`: 'none' | 'fixed' (mensal, gerada 12 meses à frente
  * e estendida conforme o uso) | 'installments' (parcelada em `times` vezes).
+ * Parcelado fora do cartão: `alreadyPaid` marca as primeiras parcelas como pagas (compra já em
+ * andamento) e `perInstallment` indica que `base.amount` é o valor de cada parcela, não o total.
  */
-export function addTransaction(base, repeat = 'none', times = 1) {
+export function addTransaction(base, repeat = 'none', times = 1, { alreadyPaid = 0, perInstallment = false } = {}) {
   const groupId = repeat === 'none' ? null : uid();
   const n = repeat === 'installments' ? Math.max(2, times) : repeat === 'fixed' ? 12 : 1;
-  const per = repeat === 'installments' ? round2(Math.floor((base.amount / n) * 100) / 100) : base.amount;
+  const total = repeat === 'installments' && perInstallment ? round2(base.amount * n) : base.amount;
+  const per = repeat === 'installments' ? (perInstallment ? base.amount : round2(Math.floor((total / n) * 100) / 100)) : base.amount;
   const c = base.cardId ? card(base.cardId) : null;
   const firstInvoice = c ? invoiceFor(c, base.date) : null;
   const created = [];
   for (let i = 0; i < n; i++) {
     const t = { ...base, id: uid(), date: shiftDate(base.date, i), groupId };
     if (repeat === 'installments') {
-      t.amount = i === 0 ? round2(base.amount - per * (n - 1)) : per;
+      t.amount = i === 0 ? round2(total - per * (n - 1)) : per;
       t.installment = { n: i + 1, total: n };
     }
     if (repeat === 'fixed') t.fixed = true;
     if (c) {
       t.invoice = addMonths(firstInvoice, i);
       t.paid = true;
-    } else if (i > 0) t.paid = false;
+    } else if (alreadyPaid) t.paid = i < alreadyPaid;
+    else if (i > 0) t.paid = false;
     S.transactions.push(t);
     created.push(t);
   }
@@ -431,6 +435,89 @@ export function allTags() {
   return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
+// ---------- compras parceladas ----------
+/**
+ * Parcela paga: fora do cartão, quando marcada como paga; no cartão, quando a fatura
+ * dela foi paga ou já venceu (compras antigas lançadas depois continuam corretas).
+ */
+export function installmentPaid(t) {
+  if (!t.cardId) return !!t.paid;
+  const c = card(t.cardId);
+  return !!c && (invoiceStatus(c, t.invoice) === 'paga' || invoiceDueDate(c, t.invoice) < today());
+}
+/** Data em que a parcela é cobrada: vencimento da fatura (cartão) ou a data do lançamento. */
+export const installmentDue = (t) => (t.cardId && card(t.cardId) ? invoiceDueDate(card(t.cardId), t.invoice) : t.date);
+
+/** Uma linha por compra parcelada, com parcelas pagas, valor pago, restante e próxima parcela. */
+export function installmentGroups(scope = 'all') {
+  const map = new Map();
+  for (const t of S.transactions) {
+    if (t.type !== 'expense' || !t.installment || !t.groupId || !inScope(t, scope)) continue;
+    if (!map.has(t.groupId)) map.set(t.groupId, []);
+    map.get(t.groupId).push(t);
+  }
+  return [...map.entries()].map(([groupId, list]) => {
+    list.sort((a, b) => a.installment.n - b.installment.n);
+    const paid = list.filter(installmentPaid);
+    const open = list.filter((t) => !installmentPaid(t)).sort((a, b) => installmentDue(a).localeCompare(installmentDue(b)));
+    const first = list[0];
+    const total = sum(list, (t) => t.amount);
+    const paidValue = sum(paid, (t) => t.amount);
+    return {
+      groupId,
+      list,
+      desc: first.desc || category(first.categoryId).name,
+      categoryId: first.categoryId,
+      cardId: first.cardId || null,
+      accountId: first.accountId || null,
+      n: first.installment.total,
+      count: list.length,
+      paidCount: paid.length,
+      total,
+      paidValue,
+      remaining: round2(total - paidValue),
+      per: list[list.length - 1].originalAmount || list[list.length - 1].amount,
+      next: open[0] || null,
+      start: first.date,
+      end: installmentDue(list[list.length - 1]),
+      discount: sum(list, (t) => (t.originalAmount ? t.originalAmount - t.amount : 0)),
+      done: !open.length,
+    };
+  });
+}
+
+/** Marca como paga a próxima parcela em aberto de uma compra fora do cartão. */
+export function payNextInstallment(groupId, date = today()) {
+  const next = S.transactions
+    .filter((t) => t.groupId === groupId && t.installment && !t.cardId && !t.paid)
+    .sort((a, b) => a.installment.n - b.installment.n)[0];
+  if (!next) return null;
+  next.paid = true;
+  if (date < next.date) next.date = date;
+  save();
+  return next;
+}
+
+/**
+ * Quitação antecipada fora do cartão: as parcelas em aberto viram pagas hoje e o valor pago
+ * (com desconto, se houver) é distribuído entre elas, guardando o valor original.
+ */
+export function settleInstallments(groupId, amountPaid, accountId, date = today()) {
+  const open = S.transactions.filter((t) => t.groupId === groupId && t.installment && !t.cardId && !t.paid).sort((a, b) => a.installment.n - b.installment.n);
+  if (!open.length) return 0;
+  const original = sum(open, (t) => t.amount);
+  const ratio = original ? amountPaid / original : 1;
+  let left = round2(amountPaid);
+  open.forEach((t, i) => {
+    const value = i === open.length - 1 ? left : round2(t.amount * ratio);
+    left = round2(left - value);
+    if (Math.abs(value - t.amount) > 0.004) t.originalAmount = t.amount;
+    Object.assign(t, { amount: value, paid: true, date, accountId: accountId || t.accountId, note: [t.note, 'Quitação antecipada'].filter(Boolean).join(' · ') });
+  });
+  save();
+  return round2(original - amountPaid);
+}
+
 // ---------- objetivos ----------
 export const goalSaved = (g) => sum(g.deposits || [], (d) => d.amount);
 
@@ -486,6 +573,10 @@ export function seedDemo(name = '') {
   addTransaction(t({ type: 'expense', amount: 42.5, desc: 'Padaria', date: d(1, 4), categoryId: padaria.id, accountId: wallet.id }));
   addTransaction(t({ type: 'expense', amount: 35, desc: 'Estacionamento', date: d(2, 3), categoryId: cat('Transporte'), accountId: wallet.id }));
   addTransaction(t({ type: 'transfer', amount: 1500, desc: 'Pró-labore', date: d(1, 28), accountId: pj.id, toAccountId: bank.id }));
+
+  // compras parceladas fora do cartão: carnê em andamento (valor por parcela) e curso no boleto
+  addTransaction(t({ type: 'expense', amount: 189.9, desc: 'Geladeira (carnê)', date: dateIn(addMonths(thisMonth(), -4), 10), categoryId: cat('Casa'), accountId: bank.id }), 'installments', 12, { perInstallment: true });
+  addTransaction(t({ type: 'expense', amount: 5400, desc: 'Curso de pós-graduação', date: d(1, 15), categoryId: cat('Educação'), accountId: bank.id, tags: ['educação'] }), 'installments', 18);
 
   // paga as faturas já vencidas dos cartões
   for (const c of S.cards)

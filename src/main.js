@@ -16,6 +16,7 @@ import { renderMore, renderCategories, renderSettings, pinPad, handleSettingChan
 import { renderCalendar } from './views/calendar.js';
 import { renderTags } from './views/tags.js';
 import { renderImport, handleImportInput } from './views/import.js';
+import { renderInstallments } from './views/installments.js';
 
 const ROUTES = [
   [/^#?\/?$/, renderHome, 'home'],
@@ -32,6 +33,7 @@ const ROUTES = [
   [/^#\/calendario$/, renderCalendar, 'more'],
   [/^#\/tags$/, renderTags, 'more'],
   [/^#\/importar$/, renderImport, 'more'],
+  [/^#\/parcelamentos$/, renderInstallments, 'more'],
 ];
 
 const NAV = [
