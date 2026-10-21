@@ -36,13 +36,13 @@ const DEFAULT_CATEGORIES = [
 
 function blank() {
   return {
-    version: 1,
-    settings: { theme: 'dark', hide: false, name: '', pinHash: null, onboarded: false },
+    version: 2,
+    settings: { theme: 'dark', hide: false, name: '', pinHash: null, onboarded: false, autoPay: false, travelTag: '', smartAlert: true },
     accounts: [],
     cards: [],
     categories: DEFAULT_CATEGORIES.map(([name, type, icon, color]) => ({ id: uid(), name, type, icon, color })),
     transactions: [],
-    budgets: {},
+    budgetMonths: {},
     goals: [],
     stoppedGroups: [],
   };
@@ -52,7 +52,12 @@ function migrate(data) {
   const base = blank();
   const s = { ...base, ...data, settings: { ...base.settings, ...(data.settings || {}) } };
   for (const k of ['accounts', 'cards', 'categories', 'transactions', 'goals', 'stoppedGroups']) if (!Array.isArray(s[k])) s[k] = base[k];
-  if (!s.budgets || typeof s.budgets !== 'object') s.budgets = {};
+  if (!s.budgetMonths || typeof s.budgetMonths !== 'object') s.budgetMonths = {};
+  // v1 guardava um único planejamento fixo; vira o planejamento do mês atual (e dos seguintes)
+  if (s.budgets && Object.keys(s.budgets).length && !Object.keys(s.budgetMonths).length)
+    s.budgetMonths[thisMonth()] = { cats: { ...s.budgets }, alert: 80, total: 0 };
+  delete s.budgets;
+  s.version = 2;
   return s;
 }
 
@@ -91,7 +96,18 @@ const UNKNOWN_CAT = { id: null, name: 'Sem categoria', icon: 'circle-help', colo
 export const category = (id) => byId(S.categories, id) || UNKNOWN_CAT;
 export const account = (id) => byId(S.accounts, id);
 export const card = (id) => byId(S.cards, id);
-export const categoriesOf = (type) => S.categories.filter((c) => c.type === type);
+/** Categorias principais de um tipo (sem as subcategorias). */
+export const categoriesOf = (type, { archived = false } = {}) =>
+  S.categories.filter((c) => c.type === type && !c.parentId && (archived ? c.archived : !c.archived));
+export const subcategoriesOf = (id, { archived = false } = {}) => S.categories.filter((c) => c.parentId === id && (archived || !c.archived));
+/** Categoria principal de uma (sub)categoria. */
+export const rootId = (id) => category(id).parentId || id;
+export const categoryLabel = (id) => {
+  const c = category(id);
+  return c.parentId ? `${category(c.parentId).name} › ${c.name}` : c.name;
+};
+/** Transações ignoradas continuam no saldo, mas ficam fora de relatórios e planejamento. */
+export const counted = (t) => !t.ignored;
 
 /** Escopo de uma transação: Pessoal (pf) ou Empresa (pj), herdado da conta/cartão. */
 export function txScope(t) {
@@ -103,8 +119,24 @@ export function inScope(t, scope) {
   if (t.type === 'transfer') return account(t.accountId)?.scope === scope || account(t.toAccountId)?.scope === scope;
   return txScope(t) === scope;
 }
-export const accountsIn = (scope) => S.accounts.filter((a) => scope === 'all' || (a.scope || 'pf') === scope);
-export const cardsIn = (scope) => S.cards.filter((c) => scope === 'all' || (c.scope || 'pf') === scope);
+export const accountsIn = (scope, { archived = false } = {}) =>
+  S.accounts.filter((a) => (scope === 'all' || (a.scope || 'pf') === scope) && !!a.archived === archived);
+export const cardsIn = (scope, { archived = false } = {}) =>
+  S.cards.filter((c) => (scope === 'all' || (c.scope || 'pf') === scope) && !!c.archived === archived);
+
+// ---------- efetivação automática ----------
+/** Com a opção ligada, despesas e receitas pendentes viram pagas no dia do vencimento. */
+export function applyAutoPay() {
+  if (!S.settings.autoPay) return;
+  const t0 = today();
+  let changed = false;
+  for (const t of S.transactions)
+    if (!t.paid && !t.cardId && (t.type === 'expense' || t.type === 'income' || t.type === 'transfer') && t.date <= t0) {
+      t.paid = true;
+      changed = true;
+    }
+  if (changed) save();
+}
 
 // ---------- saldos ----------
 /**
@@ -147,6 +179,27 @@ export function projectedBalanceAt(scope, iso) {
   return round2(b);
 }
 
+/** Corrige o saldo atual criando um lançamento de reajuste (o saldo inicial não muda). */
+export function adjustBalanceWithTransaction(accId, real) {
+  const diff = round2(real - accountBalance(accId));
+  if (!diff) return;
+  S.transactions.push({
+    id: uid(), type: diff > 0 ? 'income' : 'expense', amount: Math.abs(diff), desc: 'Reajuste de saldo', date: today(),
+    accountId: accId, paid: true, ignored: true, adjust: true, tags: [], note: 'Criado pelo reajuste de saldo',
+    categoryId: (S.categories.find((c) => c.name === 'Outros' && c.type === (diff > 0 ? 'income' : 'expense')) || {}).id,
+  });
+  save();
+}
+
+export function moveTransactions(fromId, toId) {
+  for (const t of S.transactions) {
+    if (t.accountId === fromId) t.accountId = toId;
+    if (t.toAccountId === fromId) t.toAccountId = toId;
+  }
+  for (const c of S.cards) if (c.accountId === fromId) c.accountId = toId;
+  save();
+}
+
 // ---------- cartões de crédito ----------
 /** Mês (AAAA-MM) de vencimento da fatura em que cai uma compra feita na data. */
 export function invoiceFor(c, iso) {
@@ -157,30 +210,55 @@ export function invoiceFor(c, iso) {
 }
 export const invoiceDueDate = (c, ym) => dateIn(ym, c.dueDay);
 export const invoiceCloseDate = (c, ym) => dateIn(c.dueDay <= c.closeDay ? addMonths(ym, -1) : ym, c.closeDay);
+const CARD_ITEM_TYPES = new Set(['expense', 'refund', 'invoiceAdjust']);
+/** Efeito de um item na fatura: compras somam, estornos subtraem, ajustes têm sinal próprio. */
+export const invoiceEffect = (t) => (t.type === 'refund' ? -t.amount : t.type === 'invoiceAdjust' ? t.delta : t.amount);
 export const invoiceItems = (cardId, ym) =>
-  S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.invoice === ym).sort((a, b) => b.date.localeCompare(a.date));
-export const invoiceTotal = (cardId, ym) => sum(invoiceItems(cardId, ym), (t) => t.amount);
+  S.transactions.filter((t) => CARD_ITEM_TYPES.has(t.type) && t.cardId === cardId && t.invoice === ym).sort((a, b) => b.date.localeCompare(a.date));
+export const invoiceTotal = (cardId, ym) => sum(invoiceItems(cardId, ym), invoiceEffect);
 export const invoicePaid = (cardId, ym) =>
   sum(S.transactions.filter((t) => t.type === 'payment' && t.cardId === cardId && t.invoice === ym), (t) => t.amount);
+/** Status como no app de referência: aberta, fechada, vencida, paga parcialmente ou paga. */
 export function invoiceStatus(c, ym) {
   const total = invoiceTotal(c.id, ym);
   const paid = invoicePaid(c.id, ym);
   if (total > 0 && paid >= total - 0.004) return 'paga';
-  if (today() >= invoiceCloseDate(c, ym)) return today() > invoiceDueDate(c, ym) && total > paid ? 'vencida' : 'fechada';
-  return 'aberta';
+  if (today() < invoiceCloseDate(c, ym)) return 'aberta';
+  if (paid > 0) return 'parcial';
+  return today() > invoiceDueDate(c, ym) && total > 0 ? 'vencida' : 'fechada';
 }
 export const currentInvoice = (c) => invoiceFor(c, today());
 export function cardUsed(cardId) {
-  const spent = sum(S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId), (t) => t.amount);
+  const spent = sum(S.transactions.filter((t) => CARD_ITEM_TYPES.has(t.type) && t.cardId === cardId), invoiceEffect);
   const paid = sum(S.transactions.filter((t) => t.type === 'payment' && t.cardId === cardId), (t) => t.amount);
   return Math.max(0, round2(spent - paid));
+}
+const daysBetween = (a, b) => Math.round((new Date(`${b}T12:00`) - new Date(`${a}T12:00`)) / 864e5);
+export const daysToDue = (c, ym) => daysBetween(today(), invoiceDueDate(c, ym));
+/** Melhor cartão para comprar hoje: o que dá mais dias até o vencimento da fatura da compra. */
+export function bestCard(scope = 'all') {
+  const list = cardsIn(scope).filter((c) => c.limit - cardUsed(c.id) > 0);
+  if (list.length < 2) return null;
+  return list
+    .map((c) => ({ card: c, days: daysBetween(today(), invoiceDueDate(c, invoiceFor(c, today()))) }))
+    .sort((a, b) => b.days - a.days)[0];
+}
+/** Parcelas futuras de compras no cartão que podem ser antecipadas para a fatura informada. */
+export const anticipatable = (cardId, targetYm) =>
+  S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.installment && t.invoice > targetYm).sort((a, b) => a.invoice.localeCompare(b.invoice));
+export function anticipate(ids, targetYm) {
+  for (const t of S.transactions) if (ids.includes(t.id)) {
+    t.invoice = targetYm;
+    t.anticipated = true;
+  }
+  save();
 }
 
 // ---------- resumos do mês ----------
 export const monthTx = (ym, scope) => S.transactions.filter((t) => monthOf(t.date) === ym && inScope(t, scope));
 
 export function monthSummary(ym, scope) {
-  const list = monthTx(ym, scope);
+  const list = monthTx(ym, scope).filter(counted);
   const inc = list.filter((t) => t.type === 'income');
   const exp = list.filter((t) => t.type === 'expense');
   return {
@@ -192,17 +270,23 @@ export function monthSummary(ym, scope) {
   };
 }
 
+/** Totais por categoria principal (subcategorias somam na categoria-mãe). */
 export function byCategory(ym, scope, type = 'expense') {
   const map = new Map();
   for (const t of monthTx(ym, scope)) {
-    if (t.type !== type) continue;
-    map.set(t.categoryId, round2((map.get(t.categoryId) || 0) + t.amount));
+    if (t.type !== type || !counted(t)) continue;
+    const id = rootId(t.categoryId);
+    map.set(id, round2((map.get(id) || 0) + t.amount));
   }
   return [...map.entries()].map(([id, total]) => ({ cat: category(id), total })).sort((a, b) => b.total - a.total);
 }
 
+/** Gasto do mês numa categoria (incluindo as subcategorias dela). */
 export function spentInCategory(catId, ym, scope = 'all') {
-  return sum(monthTx(ym, scope).filter((t) => t.type === 'expense' && t.categoryId === catId), (t) => t.amount);
+  return sum(
+    monthTx(ym, scope).filter((t) => t.type === 'expense' && counted(t) && (t.categoryId === catId || category(t.categoryId).parentId === catId)),
+    (t) => t.amount,
+  );
 }
 
 /** Média de gasto por categoria nos N meses anteriores ao mês informado. */
@@ -210,6 +294,29 @@ export function averageSpending(catId, ym, months = 3) {
   let total = 0;
   for (let i = 1; i <= months; i++) total += spentInCategory(catId, addMonths(ym, -i));
   return round2(total / months);
+}
+
+/** Média histórica de uma despesa pela descrição (para o alerta de gasto acima da média). */
+export function averageForDescription(desc) {
+  const key = desc.trim().toLowerCase();
+  if (!key) return null;
+  const list = S.transactions.filter((t) => t.type === 'expense' && (t.desc || '').trim().toLowerCase() === key && !t.installment);
+  return list.length >= 2 ? { avg: sum(list, (t) => t.amount) / list.length, n: list.length } : null;
+}
+
+// ---------- planejamento mensal ----------
+const EMPTY_PLAN = { cats: {}, alert: 80, total: 0 };
+/** Planejamento do mês; sem um próprio, vale o do mês anterior mais próximo. */
+export function budgetFor(ym) {
+  if (S.budgetMonths[ym]) return S.budgetMonths[ym];
+  const prev = Object.keys(S.budgetMonths).filter((k) => k < ym).sort().pop();
+  return prev ? S.budgetMonths[prev] : EMPTY_PLAN;
+}
+export const budgetOrigin = (ym) => (S.budgetMonths[ym] ? ym : Object.keys(S.budgetMonths).filter((k) => k < ym).sort().pop() || null);
+/** Planejamento editável: ao mexer num mês, ele ganha cópia própria (os meses seguintes herdam). */
+export function editableBudget(ym) {
+  if (!S.budgetMonths[ym]) S.budgetMonths[ym] = JSON.parse(JSON.stringify(budgetFor(ym)));
+  return S.budgetMonths[ym];
 }
 
 // ---------- transações ----------
@@ -223,6 +330,7 @@ export function addTransaction(base, repeat = 'none', times = 1) {
   const per = repeat === 'installments' ? round2(Math.floor((base.amount / n) * 100) / 100) : base.amount;
   const c = base.cardId ? card(base.cardId) : null;
   const firstInvoice = c ? invoiceFor(c, base.date) : null;
+  const created = [];
   for (let i = 0; i < n; i++) {
     const t = { ...base, id: uid(), date: shiftDate(base.date, i), groupId };
     if (repeat === 'installments') {
@@ -235,8 +343,10 @@ export function addTransaction(base, repeat = 'none', times = 1) {
       t.paid = true;
     } else if (i > 0) t.paid = false;
     S.transactions.push(t);
+    created.push(t);
   }
   save();
+  return created;
 }
 
 /** Mantém as despesas/receitas fixas lançadas até o mês visualizado. */
@@ -251,7 +361,8 @@ export function ensureRecurring(ym) {
   for (const last of groups.values()) {
     let i = 1;
     while (monthOf(shiftDate(last.date, i)) <= ym) {
-      const t = { ...last, id: uid(), date: shiftDate(last.date, i), paid: last.cardId ? true : false };
+      const t = { ...last, id: uid(), date: shiftDate(last.date, i), paid: !!last.cardId };
+      delete t.receipt;
       if (last.cardId) t.invoice = addMonths(last.invoice, i);
       S.transactions.push(t);
       i++;
@@ -266,12 +377,11 @@ export function updateTransaction(id, fields, applyToFuture = false) {
   if (!t) return;
   const prevDate = t.date;
   Object.assign(t, fields);
-  if (t.cardId) t.invoice = fields.invoice || invoiceFor(card(t.cardId), t.date);
+  if (t.cardId && !t.anticipated) t.invoice = fields.invoice || invoiceFor(card(t.cardId), t.date);
   if (applyToFuture && t.groupId) {
     const shared = { ...fields };
-    delete shared.date;
-    delete shared.paid;
-    delete shared.invoice;
+    for (const k of ['date', 'paid', 'invoice', 'receipt']) delete shared[k];
+    if (t.installment) delete shared.amount; // cada parcela mantém o próprio valor
     for (const o of S.transactions) if (o.groupId === t.groupId && o.id !== t.id && o.date > prevDate) Object.assign(o, shared);
   }
   save();
@@ -279,16 +389,20 @@ export function updateTransaction(id, fields, applyToFuture = false) {
 
 export function deleteTransaction(id, mode = 'one') {
   const t = byId(S.transactions, id);
-  if (!t) return;
-  if (mode === 'one' || !t.groupId) S.transactions = S.transactions.filter((x) => x.id !== id);
+  if (!t) return [];
+  let removed;
+  if (mode === 'one' || !t.groupId) removed = [t];
   else if (mode === 'future') {
-    S.transactions = S.transactions.filter((x) => !(x.groupId === t.groupId && x.date >= t.date));
+    removed = S.transactions.filter((x) => x.groupId === t.groupId && x.date >= t.date);
     if (!S.stoppedGroups.includes(t.groupId)) S.stoppedGroups.push(t.groupId);
   } else {
-    S.transactions = S.transactions.filter((x) => x.groupId !== t.groupId);
+    removed = S.transactions.filter((x) => x.groupId === t.groupId);
     S.stoppedGroups.push(t.groupId);
   }
+  const ids = new Set(removed.map((x) => x.id));
+  S.transactions = S.transactions.filter((x) => !ids.has(x.id));
   save();
+  return removed;
 }
 
 export function togglePaid(id) {
@@ -326,12 +440,16 @@ export function seedDemo(name = '') {
   S.settings.onboarded = true;
   S.settings.name = name;
   const cat = (n, type = 'expense') => S.categories.find((c) => c.name === n && c.type === type).id;
+  const padaria = { id: uid(), name: 'Padaria', type: 'expense', icon: 'coffee', color: '#E07A5F', parentId: cat('Alimentação') };
+  const feira = { id: uid(), name: 'Feira', type: 'expense', icon: 'shopping-bag', color: '#5FAF6E', parentId: cat('Alimentação') };
+  S.categories.push(padaria, feira);
   const wallet = { id: uid(), name: 'Carteira', type: 'wallet', scope: 'pf', initial: 120, color: '#C5A059' };
   const bank = { id: uid(), name: 'Banco principal', type: 'checking', scope: 'pf', initial: 2400, color: '#5B9BD5' };
   const pj = { id: uid(), name: 'Conta PJ', type: 'checking', scope: 'pj', initial: 6500, color: '#4CA3A0' };
   S.accounts.push(wallet, bank, pj);
   const gold = { id: uid(), name: 'Cartão Gold', limit: 6000, closeDay: 25, dueDay: 5, accountId: bank.id, scope: 'pf', color: '#C5A059' };
-  S.cards.push(gold);
+  const roxo = { id: uid(), name: 'Cartão Roxo', limit: 3500, closeDay: 8, dueDay: 15, accountId: bank.id, scope: 'pf', color: '#8E7CC3' };
+  S.cards.push(gold, roxo);
 
   const start = addMonths(thisMonth(), -2);
   const d = (offset, day) => dateIn(addMonths(start, offset), day);
@@ -347,7 +465,7 @@ export function seedDemo(name = '') {
 
   const variable = [
     ['Supermercado', 'Supermercado', [380, 245.7, 312.4]],
-    ['Feira', 'Alimentação', [68, 74.5, 59]],
+    ['Feira', feira.id, [68, 74.5, 59]],
     ['Restaurante', 'Restaurante', [96, 142.8, 88.5]],
     ['Combustível', 'Transporte', [210, 185.3, 230]],
     ['Farmácia', 'Saúde', [64.9, 112]],
@@ -359,27 +477,32 @@ export function seedDemo(name = '') {
         const day = 3 + ((k * 5 + j * 9 + m * 2) % 24);
         const date = d(m, day);
         if (date > today()) return;
-        const onCard = k % 2 === 1;
-        addTransaction(t({ type: 'expense', amount: v, desc, date, categoryId: cat(c), ...(onCard ? { cardId: gold.id } : { accountId: bank.id }) }));
+        const holder = k % 2 === 1 ? { cardId: k === 3 ? roxo.id : gold.id } : { accountId: bank.id };
+        addTransaction(t({ type: 'expense', amount: v, desc, date, categoryId: byId(S.categories, c) ? c : cat(c), ...holder }));
       });
     });
   }
   addTransaction(t({ type: 'transfer', amount: 300, desc: 'Saque', date: d(1, 2), accountId: bank.id, toAccountId: wallet.id }));
-  addTransaction(t({ type: 'expense', amount: 42.5, desc: 'Padaria', date: d(1, 4), categoryId: cat('Alimentação'), accountId: wallet.id }));
+  addTransaction(t({ type: 'expense', amount: 42.5, desc: 'Padaria', date: d(1, 4), categoryId: padaria.id, accountId: wallet.id }));
   addTransaction(t({ type: 'expense', amount: 35, desc: 'Estacionamento', date: d(2, 3), categoryId: cat('Transporte'), accountId: wallet.id }));
   addTransaction(t({ type: 'transfer', amount: 1500, desc: 'Pró-labore', date: d(1, 28), accountId: pj.id, toAccountId: bank.id }));
 
-  // paga as faturas já vencidas do cartão
-  for (let m = 0; m < 3; m++) {
-    const ym = addMonths(start, m);
-    const total = invoiceTotal(gold.id, ym);
-    if (total > 0 && invoiceDueDate(gold, ym) < today())
-      S.transactions.push({ id: uid(), type: 'payment', amount: total, cardId: gold.id, invoice: ym, accountId: bank.id, date: invoiceDueDate(gold, ym), paid: true, desc: 'Pagamento de fatura' });
-  }
+  // paga as faturas já vencidas dos cartões
+  for (const c of S.cards)
+    for (let m = 0; m < 3; m++) {
+      const ym = addMonths(start, m);
+      const total = invoiceTotal(c.id, ym);
+      if (total > 0 && invoiceDueDate(c, ym) < today())
+        S.transactions.push({ id: uid(), type: 'payment', amount: total, cardId: c.id, invoice: ym, accountId: bank.id, date: invoiceDueDate(c, ym), paid: true, desc: `Fatura ${c.name}` });
+    }
   // no exemplo, o passado está pago e o futuro fica pendente
   for (const x of S.transactions) if (!x.cardId) x.paid = x.date <= today();
 
-  S.budgets = { [cat('Supermercado')]: 900, [cat('Restaurante')]: 300, [cat('Lazer')]: 250, [cat('Transporte')]: 400, [cat('Alimentação')]: 250 };
+  S.budgetMonths[start] = {
+    alert: 80,
+    total: 3200,
+    cats: { [cat('Supermercado')]: 900, [cat('Restaurante')]: 300, [cat('Lazer')]: 250, [cat('Transporte')]: 400, [cat('Alimentação')]: 250 },
+  };
   S.goals.push(
     { id: uid(), name: 'Reserva de emergência', target: 18000, deadline: dateIn(addMonths(thisMonth(), 14), 1), icon: 'shield', color: '#C5A059', deposits: [{ date: d(0, 6), amount: 2500 }, { date: d(1, 6), amount: 800 }, { date: d(2, 6), amount: 800 }] },
     { id: uid(), name: 'Viagem de férias', target: 7000, deadline: dateIn(addMonths(thisMonth(), 8), 1), icon: 'plane', color: '#4CA3A0', deposits: [{ date: d(1, 15), amount: 900 }] },

@@ -1,5 +1,5 @@
 // Relatórios: receitas x despesas, categorias, evolução do saldo e DRE simplificado do mês.
-import { S, monthSummary, byCategory, projectedBalanceAt, monthTx, category, account, card, SCOPES } from '../store.js';
+import { S, monthSummary, byCategory, projectedBalanceAt, monthTx, categoryLabel, account, card, SCOPES } from '../store.js';
 import { esc, icon, addMonths, monthEnd, monthLabel, shortDate, moneyPlain, saveFile, money } from '../util.js';
 import { UI, $m, monthSwitcher, scopeChips, donut, barsChart, lineChart, empty, pct, on, rerender, toast } from '../ui.js';
 
@@ -17,6 +17,7 @@ export function renderReports() {
   const series = months.map((m) => ({ label: monthLabel(m, { short: true, year: false }), ...monthSummary(m, sc) }));
   const cats = byCategory(ym, sc, UI.reportTab);
   const catTotal = cats.reduce((a, c) => a + c.total, 0);
+  const prev = new Map(byCategory(addMonths(ym, -1), sc, UI.reportTab).map((c) => [c.cat.id, c.total]));
   const d = dre(ym, sc);
   const balance = months.map((m) => ({ label: monthLabel(m, { short: true, year: false }), v: projectedBalanceAt(sc, monthEnd(m)) }));
 
@@ -49,7 +50,12 @@ export function renderReports() {
         <header class="card-head"><h2>Por categoria</h2>
           <div class="chips small">${[['expense', 'Despesas'], ['income', 'Receitas']].map(([v, l]) => `<button class="chip ${UI.reportTab === v ? 'on' : ''}" data-action="report-tab" data-v="${v}">${l}</button>`).join('')}</div></header>
         ${cats.length ? `<div class="donut-wrap">${donut(cats.map((c) => ({ value: c.total, color: c.cat.color, label: c.cat.name })), { label: 'Total', value: UI.hide ? '•••' : money(catTotal) })}</div>
-          <ul class="list compact">${cats.map((c) => `<li class="row"><i class="dot-c" style="background:${c.cat.color}"></i><span class="grow">${esc(c.cat.name)}</span><span class="muted small">${pct(c.total, catTotal)}</span><span class="num">${$m(c.total)}</span></li>`).join('')}</ul>`
+          <ul class="list compact">${cats.map((c) => {
+            const before = prev.get(c.cat.id) || 0;
+            const diff = before ? Math.round((c.total / before - 1) * 100) : null;
+            const bad = UI.reportTab === 'expense' ? diff > 0 : diff < 0;
+            return `<li class="row"><i class="dot-c" style="background:${c.cat.color}"></i><span class="grow">${esc(c.cat.name)}<small>${diff == null ? 'novo no mês' : `${diff > 0 ? '▲' : diff < 0 ? '▼' : '='} ${Math.abs(diff)}% vs ${monthLabel(addMonths(ym, -1), { short: true, year: false })}`}</small></span><span class="muted small">${pct(c.total, catTotal)}</span><span class="num ${diff ? (bad ? 'neg' : 'pos') : ''}">${$m(c.total)}</span></li>`;
+          }).join('')}</ul>`
           : empty('chart-pie', 'Sem dados', `Nenhuma ${UI.reportTab === 'expense' ? 'despesa' : 'receita'} em ${monthLabel(ym)}.`)}
       </article>
 
@@ -73,7 +79,7 @@ ${top || '—'}
 (Enviado pelo app Ruffino Finanças)`;
 }
 
-const TYPE_LABEL = { income: 'Receita', expense: 'Despesa', transfer: 'Transferência', payment: 'Pagamento de fatura' };
+const TYPE_LABEL = { income: 'Receita', expense: 'Despesa', transfer: 'Transferência', payment: 'Pagamento de fatura', refund: 'Estorno', invoiceAdjust: 'Ajuste de fatura' };
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 export function transactionsCsv(list) {
@@ -85,11 +91,11 @@ export function transactionsCsv(list) {
       shortDate(t.date),
       TYPE_LABEL[t.type],
       t.desc,
-      t.categoryId ? category(t.categoryId).name : '',
+      t.categoryId ? categoryLabel(t.categoryId) : '',
       t.cardId ? card(t.cardId)?.name : account(t.accountId)?.name,
       t.toAccountId ? account(t.toAccountId)?.name : '',
-      (t.type === 'income' ? '' : t.type === 'transfer' ? '' : '-') + moneyPlain(t.amount),
-      t.paid ? 'Pago' : 'Pendente',
+      t.type === 'invoiceAdjust' ? moneyPlain(t.delta) : (t.type === 'income' || t.type === 'refund' || t.type === 'transfer' ? '' : '-') + moneyPlain(t.amount),
+      `${t.paid ? 'Pago' : 'Pendente'}${t.ignored ? ' (ignorada)' : ''}`,
       t.installment ? `${t.installment.n}/${t.installment.total}` : '',
       (t.tags || []).join(', '),
       t.note,

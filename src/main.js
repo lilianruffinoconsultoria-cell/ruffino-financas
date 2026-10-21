@@ -1,6 +1,6 @@
 // Ponto de entrada: estrutura da tela, rotas, eventos globais, boas-vindas e bloqueio por PIN.
 import './styles.css';
-import { S, ensureRecurring, seedDemo, startFromScratch } from './store.js';
+import { S, ensureRecurring, applyAutoPay, seedDemo, startFromScratch } from './store.js';
 import { icon, addMonths, thisMonth, sha256, isNative } from './util.js';
 import { UI, ACTIONS, on, setRerender, removeSheet, sheetOpen, closeSheet } from './ui.js';
 import { applyTheme } from './theme.js';
@@ -13,6 +13,9 @@ import { renderAccounts, renderCards, renderCardDetail } from './views/accounts.
 import { renderGoals } from './views/goals.js';
 import { renderReports } from './views/reports.js';
 import { renderMore, renderCategories, renderSettings, pinPad, handleSettingChange, importBackup } from './views/more.js';
+import { renderCalendar } from './views/calendar.js';
+import { renderTags } from './views/tags.js';
+import { renderImport, handleImportInput } from './views/import.js';
 
 const ROUTES = [
   [/^#?\/?$/, renderHome, 'home'],
@@ -26,6 +29,9 @@ const ROUTES = [
   [/^#\/objetivos$/, renderGoals, 'more'],
   [/^#\/categorias$/, renderCategories, 'more'],
   [/^#\/config$/, renderSettings, 'more'],
+  [/^#\/calendario$/, renderCalendar, 'more'],
+  [/^#\/tags$/, renderTags, 'more'],
+  [/^#\/importar$/, renderImport, 'more'],
 ];
 
 const NAV = [
@@ -62,6 +68,7 @@ function render({ keepScroll = false } = {}) {
   const route = ROUTES.find(([re]) => (match = hash.match(re))) || ROUTES[0];
   const [, fn, tab] = route;
   ensureRecurring(UI.month > thisMonth() ? UI.month : addMonths(thisMonth(), 1));
+  applyAutoPay();
 
   const active = document.activeElement;
   const inputKey = active?.dataset?.input;
@@ -119,6 +126,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset?.setting) handleSettingChange(el);
+  if (el.dataset?.input?.startsWith('import-')) handleImportInput(el);
   if (el.dataset?.input === 'backup-import' && el.files?.[0]) {
     importBackup(el.files[0]);
     el.value = '';

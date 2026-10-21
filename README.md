@@ -13,6 +13,12 @@ Funciona no navegador (computador e celular), pode ser instalado como app (PWA) 
 - **Relatórios**: DRE simplificado do mês, receitas x despesas (6 meses), categorias e evolução do saldo; envio do resumo pelo WhatsApp.
 - **Pessoal x Empresa**: cada conta/cartão é marcado como PF ou PJ, e todas as telas filtram por escopo.
 - **Segurança e dados**: PIN de 4 dígitos, tema claro/escuro, backup/restauração em JSON e exportação CSV.
+- **Lançar pela notificação/SMS**: cole a mensagem do banco (Nubank, Inter, BB, C6, Bradesco, Santander, Itaú, Caixa, Neon, Digio, Sicoob…) e o lançamento sai preenchido com valor, estabelecimento, data e tipo.
+- **Cartões avançados**: melhor cartão para comprar hoje, estorno, ajuste de fatura, antecipação de parcelas e fatura paga parcialmente.
+- **Planejamento por mês**: meta geral, % de alerta configurável, limites por subcategoria; cada mês herda o plano anterior.
+- **Organização**: subcategorias, arquivar contas/cartões/categorias, ignorar transações nos relatórios, tags com totais, modo viagem, calendário e filtros avançados.
+- **Automação**: efetivar pendências no vencimento, alerta de despesa acima da média, reajuste de saldo e mover lançamentos entre contas.
+- **Importação e comprovantes**: extrato OFX/CSV com prévia e detecção de duplicados; foto ou PDF do comprovante em cada lançamento (guardado no aparelho, fora do backup JSON).
 
 Os dados ficam guardados **somente no aparelho** (armazenamento local do navegador/app). Faça backup pela tela Configurações.
 

@@ -1,5 +1,5 @@
 // Service worker: deixa o app funcionando offline depois do primeiro acesso.
-const CACHE = 'ruffino-financas-v1';
+const CACHE = 'ruffino-financas-v2';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest'])));

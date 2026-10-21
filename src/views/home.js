@@ -1,7 +1,7 @@
 // Tela inicial: saldo geral, resumo do mês, contas, cartões, categorias, pendências, metas e dica.
 import {
   S, accountsIn, cardsIn, accountBalance, totalBalance, monthSummary, byCategory, currentInvoice, invoiceTotal, invoiceDueDate,
-  cardUsed, pendingUntil, goalSaved, spentInCategory, ACCOUNT_ICONS, category,
+  cardUsed, pendingUntil, goalSaved, spentInCategory, ACCOUNT_ICONS, category, budgetFor, bestCard,
 } from '../store.js';
 import { esc, icon, monthEnd, monthLabel, shortDate, today } from '../util.js';
 import { UI, $m, monthSwitcher, scopeChips, donut, progress, catBadge, empty } from '../ui.js';
@@ -24,9 +24,11 @@ export function renderHome() {
   const cats = byCategory(ym, sc).slice(0, 5);
   const catTotal = cats.reduce((a, c) => a + c.total, 0);
   const pend = pendingUntil(monthEnd(ym), sc).slice(0, 5);
-  const budgetIds = Object.keys(S.budgets);
-  const planned = budgetIds.reduce((a, id) => a + S.budgets[id], 0);
-  const plannedSpent = budgetIds.reduce((a, id) => a + spentInCategory(id, ym, sc), 0);
+  const plan = budgetFor(ym);
+  const budgetIds = Object.keys(plan.cats).filter((id) => !category(id).parentId && category(id).id);
+  const planned = plan.total || budgetIds.reduce((a, id) => a + plan.cats[id], 0);
+  const plannedSpent = plan.total ? sum.expense : budgetIds.reduce((a, id) => a + spentInCategory(id, ym, sc), 0);
+  const best = bestCard(sc);
   const tip = TIPS[(new Date().getDate() + new Date().getMonth()) % TIPS.length];
 
   return `
@@ -36,6 +38,7 @@ export function renderHome() {
       <button class="icon-btn" data-action="toggle-hide" aria-label="${UI.hide ? 'Mostrar valores' : 'Ocultar valores'}">${icon(UI.hide ? 'eye-off' : 'eye')}</button>
     </header>
     ${scopeChips()}
+    ${S.settings.travelTag ? `<a class="badge-line" href="#/tags">${icon('plane', 14)} Modo viagem ativo · novos lançamentos recebem a tag <b>#${esc(S.settings.travelTag)}</b></a>` : ''}
 
     <article class="hero">
       <p class="hero-k">Saldo geral</p>
@@ -67,6 +70,7 @@ export function renderHome() {
 
       <article class="card">
         <header class="card-head"><h2>Cartões de crédito</h2><a href="#/cartoes" class="link">Ver todos</a></header>
+        ${best ? `<p class="best-card sm">${icon('star', 16)}<span>Melhor cartão para comprar hoje: <b>${esc(best.card.name)}</b> (${best.days} dias até vencer)</span></p>` : ''}
         ${cards.length ? `<ul class="list">${cards.map((c) => {
           const inv = currentInvoice(c);
           const used = cardUsed(c.id);
@@ -90,7 +94,7 @@ export function renderHome() {
         <header class="card-head"><h2>Planejamento</h2><a href="#/planejamento" class="link">Abrir</a></header>
         ${planned ? `<div class="plan-sum"><div><small>Gasto</small><b>${$m(plannedSpent)}</b></div><div><small>Planejado</small><b>${$m(planned)}</b></div></div>
           ${progress(plannedSpent, planned)}
-          <ul class="list compact">${budgetIds.map((id) => ({ id, spent: spentInCategory(id, ym, sc), limit: S.budgets[id] }))
+          <ul class="list compact">${budgetIds.map((id) => ({ id, spent: spentInCategory(id, ym, sc), limit: plan.cats[id] }))
             .sort((a, b) => b.spent / b.limit - a.spent / a.limit).slice(0, 3)
             .map((b) => `<li class="row">${catBadge(category(b.id), 30)}<span class="grow"><b>${esc(category(b.id).name)}</b>${progress(b.spent, b.limit)}</span><span class="num sm">${Math.round((b.spent / b.limit) * 100)}%</span></li>`).join('')}</ul>`
           : empty('target', 'Sem planejamento', 'Defina limites de gasto por categoria.', '<a class="btn primary sm" href="#/planejamento">Planejar mês</a>')}

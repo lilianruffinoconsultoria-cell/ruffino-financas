@@ -1,22 +1,26 @@
 // Menu "Mais", gestão de categorias e configurações (tema, PIN, backup, dados de exemplo).
-import { S, save, replaceState, resetAll, seedDemo, category, categoriesOf, COLORS } from '../store.js';
+import { S, save, replaceState, resetAll, seedDemo, category, categoriesOf, subcategoriesOf, COLORS } from '../store.js';
 import { esc, icon, uid, today, saveFile, sha256, PICKABLE_ICONS } from '../util.js';
 import { UI, pageHead, catBadge, on, rerender, openSheet, closeSheet, toast, confirmSheet, go } from '../ui.js';
 import { transactionsCsv } from './reports.js';
 import { applyTheme } from '../theme.js';
 
 const MENU = [
-  ['#/contas', 'landmark', 'Contas', 'Saldos de bancos, carteira e investimentos'],
-  ['#/cartoes', 'credit-card', 'Cartões de crédito', 'Faturas, limite e pagamentos'],
+  ['#/contas', 'landmark', 'Contas', 'Saldos, reajuste, arquivar e mover lançamentos'],
+  ['#/cartoes', 'credit-card', 'Cartões de crédito', 'Faturas, estorno, antecipação e melhor cartão'],
   ['#/objetivos', 'target', 'Objetivos', 'Metas de economia com prazo'],
-  ['#/relatorios', 'chart-column', 'Relatórios', 'DRE do mês, categorias e evolução'],
-  ['#/categorias', 'tag', 'Categorias', 'Personalize nomes, ícones e cores'],
-  ['#/config', 'settings', 'Configurações', 'Tema, senha, backup e exportação'],
+  ['#/relatorios', 'chart-column', 'Relatórios', 'DRE do mês, comparativos e evolução'],
+  ['#/calendario', 'calendar', 'Calendário', 'Receitas, despesas e pendências por dia'],
+  ['#/tags', 'tag', 'Tags e modo viagem', 'Totais por tag e viagem automática'],
+  ['#/categorias', 'palette', 'Categorias', 'Subcategorias, ícones, cores e arquivo'],
+  ['#/importar', 'upload', 'Importar extrato', 'Arquivo OFX ou CSV do banco'],
+  ['#/config', 'settings', 'Configurações', 'Tema, senha, backup e automações'],
 ];
 
 export function renderMore() {
   return `<section>
     <header class="page-head"><h1>Mais</h1></header>
+    <button class="consult capture" data-action="capture"><span class="menu-ic gold">${icon('sparkles', 22)}</span><span><b>Lançar pela notificação ou SMS</b><small>Cole a mensagem do banco e o lançamento sai preenchido</small></span></button>
     <div class="menu-grid">${MENU.map(([href, ic, t, d]) => `<a class="menu-item" href="${href}"><span class="menu-ic">${icon(ic, 22)}</span><span><b>${t}</b><small>${d}</small></span>${icon('chevron-right', 18, 'muted')}</a>`).join('')}</div>
     <a class="consult" href="https://wa.me/5514996805832?text=${encodeURIComponent('Olá, Lilian! Vim pelo app Ruffino Finanças e gostaria de falar sobre consultoria financeira.')}" target="_blank" rel="noopener">
       <span class="menu-ic gold">${icon('message-circle', 22)}</span><span><b>Fale com a consultora</b><small>Lilian Ruffino Consultoria · BPO financeiro, planejamento e tributos</small></span></a>
@@ -24,24 +28,31 @@ export function renderMore() {
 }
 
 // ---------- categorias ----------
+const countTx = (id) => S.transactions.filter((t) => t.categoryId === id).length;
+const catRow = (c) => `<li><button class="row linklike" data-action="cat-form" data-id="${c.id}">${catBadge(c, 36)}<span class="grow"><b>${esc(c.name)}</b><small>${countTx(c.id)} lançamento(s)${c.archived ? ' · arquivada' : ''}</small></span>${icon('pencil', 16, 'muted')}</button></li>
+  ${subcategoriesOf(c.id, { archived: true }).map((s) => `<li class="sub-row"><button class="row linklike" data-action="cat-form" data-id="${s.id}"><span class="sub-mark">↳</span><span class="grow"><b>${esc(s.name)}</b><small>${countTx(s.id)} lançamento(s)${s.archived ? ' · arquivada' : ''}</small></span>${icon('pencil', 14, 'muted')}</button></li>`).join('')}
+  ${c.archived ? '' : `<li class="sub-row"><button class="link sub-add" data-action="cat-form" data-parent="${c.id}">${icon('plus', 14)} Subcategoria</button></li>`}`;
+
 export function renderCategories() {
   const list = categoriesOf(UI.catTab);
+  const archived = categoriesOf(UI.catTab, { archived: true });
   return `<section>
     ${pageHead('Categorias', { back: '#/mais', right: `<button class="btn primary sm" data-action="cat-form">${icon('plus', 16)} Nova</button>` })}
     <div class="chips">${[['expense', 'Despesas'], ['income', 'Receitas']].map(([v, l]) => `<button class="chip ${UI.catTab === v ? 'on' : ''}" data-action="cat-tab" data-v="${v}">${l}</button>`).join('')}</div>
-    <article class="card"><ul class="list">${list.map((c) => {
-      const n = S.transactions.filter((t) => t.categoryId === c.id).length;
-      return `<li><button class="row linklike" data-action="cat-form" data-id="${c.id}">${catBadge(c, 36)}<span class="grow"><b>${esc(c.name)}</b><small>${n} lançamento(s)</small></span>${icon('pencil', 16, 'muted')}</button></li>`;
-    }).join('')}</ul></article>
+    <article class="card"><ul class="list">${list.map(catRow).join('')}</ul></article>
+    ${archived.length ? `<details class="card"><summary class="card-head"><h2>Arquivadas (${archived.length})</h2></summary><ul class="list">${archived.map(catRow).join('')}</ul></details>` : ''}
   </section>`;
 }
 
-function categoryForm(c) {
+function categoryForm(c, parentId = null) {
   const isEdit = !!c;
-  const v = c || { type: UI.catTab, icon: 'tag', color: COLORS[S.categories.length % COLORS.length] };
+  const parent = category(isEdit ? c.parentId : parentId);
+  const isSub = !!(isEdit ? c.parentId : parentId);
+  const v = c || { type: isSub ? parent.type : UI.catTab, icon: isSub ? parent.icon : 'tag', color: isSub ? parent.color : COLORS[S.categories.length % COLORS.length], parentId };
   if (!PICKABLE_ICONS.includes(v.icon) && v.icon !== 'tag') PICKABLE_ICONS.push(v.icon);
-  openSheet(`<form class="tx-form"><h2 class="sheet-title">${isEdit ? 'Editar categoria' : `Nova categoria de ${v.type === 'income' ? 'receita' : 'despesa'}`}</h2>
+  openSheet(`<form class="tx-form"><h2 class="sheet-title">${isEdit ? (isSub ? 'Editar subcategoria' : 'Editar categoria') : isSub ? `Nova subcategoria de ${esc(parent.name)}` : `Nova categoria de ${v.type === 'income' ? 'receita' : 'despesa'}`}</h2>
     <label class="field"><span>Nome</span><input name="name" maxlength="30" value="${esc(v.name || '')}" autofocus></label>
+    ${isEdit ? `<label class="switch-row"><span>Arquivar <small class="muted">(some da escolha de categoria; o histórico continua)</small></span><input type="checkbox" role="switch" name="archived" ${v.archived ? 'checked' : ''}></label>` : ''}
     <fieldset class="field"><legend>Ícone</legend><div class="icon-grid">${PICKABLE_ICONS.map((i) => `<label><input type="radio" name="icon" value="${i}" ${i === v.icon ? 'checked' : ''}><span>${icon(i, 18)}</span></label>`).join('')}</div></fieldset>
     <div class="field"><span>Cor</span><div class="swatches">${COLORS.map((col) => `<label style="--c:${col}"><input type="radio" name="color" value="${col}" ${col === v.color ? 'checked' : ''}><span></span></label>`).join('')}</div></div>
     <p class="form-error" role="alert" hidden></p>
@@ -50,31 +61,44 @@ function categoryForm(c) {
       const f = sheet.querySelector('form');
       f.addEventListener('submit', (e) => {
         e.preventDefault();
-        if (!f.name.value.trim()) {
-          const er = f.querySelector('.form-error');
+        const er = f.querySelector('.form-error');
+        const name = f.name.value.trim();
+        if (!name) {
           er.textContent = 'Informe o nome.';
           er.hidden = false;
           return;
         }
-        const data = { name: f.name.value.trim(), icon: f.icon.value || 'tag', color: f.color.value };
+        if (isSub && name.toLowerCase() === parent.name.toLowerCase()) {
+          er.textContent = 'Categoria e subcategoria não podem ter o mesmo nome.';
+          er.hidden = false;
+          return;
+        }
+        const data = { name, icon: f.icon.value || 'tag', color: f.color.value, archived: !!f.archived?.checked };
         if (isEdit) Object.assign(category(c.id), data);
-        else S.categories.push({ id: uid(), type: v.type, ...data });
+        else S.categories.push({ id: uid(), type: v.type, ...(isSub ? { parentId } : {}), ...data });
         save();
         closeSheet();
-        toast('Categoria salva.');
+        toast(isSub ? 'Subcategoria salva.' : 'Categoria salva.');
         rerender();
       });
       sheet.querySelector('[data-del]')?.addEventListener('click', async () => {
+        const subs = isSub ? [] : subcategoriesOf(c.id, { archived: true });
         const others = categoriesOf(c.type).filter((x) => x.id !== c.id);
-        if (!others.length) return toast('Mantenha ao menos uma categoria.');
-        const n = S.transactions.filter((t) => t.categoryId === c.id).length;
-        const fallback = others.find((x) => x.name === 'Outros') || others[0];
-        const ok = await confirmSheet({ title: `Excluir “${c.name}”?`, text: n ? `${n} lançamento(s) serão movidos para “${fallback.name}”.` : '', options: [{ label: 'Excluir', value: 'yes', danger: true }] });
+        if (!isSub && !others.length) return toast('Mantenha ao menos uma categoria.');
+        const fallback = isSub ? parent : others.find((x) => x.name === 'Outros') || others[0];
+        const ids = new Set([c.id, ...subs.map((s) => s.id)]);
+        const n = S.transactions.filter((t) => ids.has(t.categoryId)).length;
+        const ok = await confirmSheet({
+          title: `Excluir “${c.name}”?`,
+          text: `${n ? `${n} lançamento(s) serão reassociados a “${fallback.name}”. ` : ''}${subs.length ? `As ${subs.length} subcategoria(s) também serão excluídas. ` : ''}Se quiser manter o histórico separado, prefira arquivar.`,
+          options: [{ label: 'Excluir', value: 'yes', danger: true }],
+        });
         if (!ok) return;
-        for (const t of S.transactions) if (t.categoryId === c.id) t.categoryId = fallback.id;
-        S.categories = S.categories.filter((x) => x.id !== c.id);
-        delete S.budgets[c.id];
+        for (const t of S.transactions) if (ids.has(t.categoryId)) t.categoryId = fallback.id;
+        S.categories = S.categories.filter((x) => !ids.has(x.id));
+        for (const plan of Object.values(S.budgetMonths)) for (const id of ids) delete plan.cats[id];
         save();
+        toast('A reassociação foi concluída com sucesso.');
         rerender();
       });
     },
@@ -95,6 +119,12 @@ export function renderSettings() {
       <header class="card-head"><h2>Aparência</h2></header>
       <div class="seg three">${themes.map(([v, l, ic]) => `<button class="seg-btn ${st.theme === v ? 'on' : ''}" data-action="theme" data-v="${v}">${icon(ic, 16)}<span>${l}</span></button>`).join('')}</div>
       <label class="switch-row"><span>Abrir com valores ocultos</span><input type="checkbox" role="switch" data-setting="hide" ${st.hide ? 'checked' : ''}></label>
+    </article>
+    <article class="card">
+      <header class="card-head"><h2>Automações</h2></header>
+      <label class="switch-row"><span>Efetivar automaticamente <small class="muted">(contas pendentes viram pagas no vencimento)</small></span><input type="checkbox" role="switch" data-setting="autoPay" ${st.autoPay ? 'checked' : ''}></label>
+      <label class="switch-row"><span>Análise inteligente <small class="muted">(avisa quando uma despesa está muito acima da média)</small></span><input type="checkbox" role="switch" data-setting="smartAlert" ${st.smartAlert ? 'checked' : ''}></label>
+      <div class="switch-row"><span>Modo viagem ${st.travelTag ? `<small class="muted">· ativo com #${esc(st.travelTag)}</small>` : '<small class="muted">· desativado</small>'}</span><button class="btn ghost sm" data-action="travel">${icon('plane', 16)} ${st.travelTag ? 'Alterar' : 'Ativar'}</button></div>
     </article>
     <article class="card">
       <header class="card-head"><h2>Segurança</h2></header>
@@ -160,7 +190,7 @@ export function pinPad(title, onDone, { allowCancel = true } = {}) {
 
 on({
   'cat-tab': (el) => ((UI.catTab = el.dataset.v), rerender()),
-  'cat-form': (el) => categoryForm(el.dataset.id ? category(el.dataset.id) : null),
+  'cat-form': (el) => categoryForm(el.dataset.id ? category(el.dataset.id) : null, el.dataset.parent || null),
   theme: (el) => {
     S.settings.theme = el.dataset.v;
     save();
@@ -221,8 +251,9 @@ on({
 /** Campos de configuração e restauração de backup (eventos "change"). */
 export function handleSettingChange(el) {
   if (el.dataset.setting === 'name') S.settings.name = el.value.trim();
-  if (el.dataset.setting === 'hide') S.settings.hide = el.checked;
+  if (['hide', 'autoPay', 'smartAlert'].includes(el.dataset.setting)) S.settings[el.dataset.setting] = el.checked;
   save();
+  if (el.dataset.setting === 'autoPay' && el.checked) toast('Pendências vencidas serão efetivadas automaticamente.');
 }
 
 export async function importBackup(file) {
