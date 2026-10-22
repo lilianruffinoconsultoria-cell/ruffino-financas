@@ -8,3 +8,4 @@ ios/
 *.jks
 *.keystore
 mobile-preview.html
+.env.local

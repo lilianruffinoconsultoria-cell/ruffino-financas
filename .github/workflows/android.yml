@@ -1,0 +1,74 @@
+name: Gerar APK Android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap add android
+      - name: Ícones e tela de abertura
+        run: >
+          npx --yes @capacitor/assets@3.0.5 generate --android
+          --iconBackgroundColor "#0F1012" --iconBackgroundColorDark "#0F1012"
+          --splashBackgroundColor "#0F1012" --splashBackgroundColorDark "#0F1012"
+      - run: npx cap sync android
+
+      # Com a chave de assinatura nos "secrets", o APK sai sempre com a mesma assinatura
+      # e as atualizações instalam por cima sem apagar os dados do app.
+      - name: Compilar APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            ./gradlew assembleRelease --no-daemon \
+              -Pandroid.injected.signing.store.file="$RUNNER_TEMP/release.p12" \
+              -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+              -Pandroid.injected.signing.key.alias=ruffino \
+              -Pandroid.injected.signing.key.password="$KEYSTORE_PASSWORD"
+            cp app/build/outputs/apk/release/app-release.apk ../RuffinoFinancas.apk
+          else
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../RuffinoFinancas.apk
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RuffinoFinancas-apk
+          path: RuffinoFinancas.apk
+
+      - name: Publicar na página de Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk-latest --yes --cleanup-tag || true
+          gh release create apk-latest RuffinoFinancas.apk \
+            --title "Ruffino Finanças — APK Android" \
+            --notes "Baixe o arquivo RuffinoFinancas.apk no celular Android e toque para instalar (permita a instalação de fontes desconhecidas quando o Android pedir). Gerado do commit ${GITHUB_SHA::7}."

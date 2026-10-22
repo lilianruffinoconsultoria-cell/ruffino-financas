@@ -11,6 +11,7 @@ export const UI = {
   pendingOnly: false,
   catTab: 'expense',
   invoice: {},
+  invItems: 'all',
   reportTab: 'expense',
 };
 

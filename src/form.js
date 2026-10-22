@@ -1,9 +1,9 @@
 // Formulário de lançamento: despesa, receita, transferência e despesa no cartão.
 import {
   S, save, byId, category, categoriesOf, subcategoriesOf, addTransaction, updateTransaction, deleteTransaction, descriptionsIndex, allTags,
-  invoiceFor, card, SCOPES, averageForDescription, rootId,
+  invoiceFor, card, SCOPES, averageForDescription, rootId, knownPeople,
 } from './store.js';
-import { esc, icon, today, isoDate, parseMoney, moneyPlain, monthLabel, money, uid } from './util.js';
+import { esc, icon, today, isoDate, parseMoney, moneyPlain, monthLabel, money, uid, addMonths } from './util.js';
 import { openSheet, closeSheet, confirmSheet, rerender, toast, on, go } from './ui.js';
 import { parseBankMessage } from './capture.js';
 import { putReceipt, getReceipt, deleteReceipt, prepareFile } from './receipts.js';
@@ -64,6 +64,10 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
   const selSub = v.categoryId && category(v.categoryId).parentId ? v.categoryId : '';
   const descs = [...descriptionsIndex().keys()].slice(-200);
   const tags = allTags();
+  const instPreset = preset.repeat === 'installments';
+  // "Com quem": parcelamentos fora do cartão (pessoa, loja, crediário)
+  const showPerson = kind === 'expense' || kind === 'income';
+  const personVisible = showPerson && (isEdit ? !!(v.installment || v.person) : instPreset || !!v.person);
 
   const html = `
   <form class="tx-form" novalidate>
@@ -95,7 +99,7 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
           : `<label class="field"><span>Conta</span><select name="accountId">${accountOptions(v.accountId || activeAccounts()[0].id)}</select></label>`
     }
 
-    <div class="field"><span>Data</span>
+    <div class="field"><span data-date-label>Data</span>
       <div class="date-row">
         <button type="button" class="chip" data-date="${today()}">Hoje</button>
         <button type="button" class="chip" data-date="${yesterday()}">Ontem</button>
@@ -103,7 +107,7 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
       </div>
     </div>
 
-    ${kind === 'card' ? '' : `<label class="switch-row"><span>${kind === 'income' ? 'Recebido' : kind === 'transfer' ? 'Transferência efetuada' : 'Pago'}</span><input type="checkbox" role="switch" name="paid" ${v.paid !== false ? 'checked' : ''}></label>`}
+    ${kind === 'card' ? '' : `<label class="switch-row"><span data-paid-label>${kind === 'income' ? 'Recebido' : kind === 'transfer' ? 'Transferência efetuada' : 'Pago'}</span><input type="checkbox" role="switch" name="paid" ${v.paid !== false && !(instPreset && !isEdit) ? 'checked' : ''}></label>`}
 
     ${
       isEdit
@@ -116,13 +120,21 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
               <select name="repeat"><option value="none">Não repete</option><option value="fixed">Fixa (todo mês)</option>${kind === 'transfer' ? '' : `<option value="installments" ${preset.repeat === 'installments' ? 'selected' : ''}>Parcelada</option>`}</select></label>
             <label class="field" data-times ${preset.repeat === 'installments' ? '' : 'hidden'}><span>Nº de parcelas</span><input name="times" type="number" min="2" max="420" value="${preset.times || 2}" inputmode="numeric"></label>
           </div>
-          <div class="installment-opts" data-inst-opts ${preset.repeat === 'installments' ? '' : 'hidden'}>
+          <div class="installment-opts" data-inst-opts ${instPreset ? '' : 'hidden'}>
             <label class="field"><span>O valor informado é</span><select name="amountMode"><option value="total">O total da compra</option><option value="per">O valor de cada parcela</option></select></label>
-            ${kind === 'card' ? '<p class="hint">No cartão, cada parcela entra numa fatura e conta como paga quando a fatura é paga ou vence.</p>' : `<label class="field"><span>Parcelas já pagas <small>(compra em andamento)</small></span><input name="alreadyPaid" type="number" min="0" max="419" value="0" inputmode="numeric"></label>
-            <p class="hint">Compra já em andamento? Use a data da <b>1ª parcela</b> e informe quantas já pagou.</p>`}
+            <div class="field"><span>Situação da compra</span><div class="seg two" data-progress>
+              <label class="seg-btn on"><input type="radio" name="progress" value="new" checked>Compra nova</label>
+              <label class="seg-btn"><input type="radio" name="progress" value="ongoing">Já estou pagando</label></div></div>
+            <label class="field" data-current hidden><span>${kind === 'card' ? 'Parcela que aparece na fatura' : 'Parcela atual (a próxima a pagar)'}</span><input name="startAt" type="number" min="2" max="420" value="2" inputmode="numeric"></label>
+            <p class="hint" data-ongoing-hint hidden></p>
+            ${kind === 'card' ? '<p class="hint">Cada fatura recebe só a parcela do mês. O restante ocupa o limite do cartão, mas não entra no valor da fatura atual.</p>' : ''}
             <p class="hint" data-inst-preview></p>
           </div>`
     }
+
+    ${showPerson ? `<label class="field" data-person ${personVisible ? '' : 'hidden'}><span>${kind === 'income' ? 'Quem vai te pagar' : 'Com quem é a compra'} <small>(pessoa, loja, crediário)</small></span>
+      <input name="person" list="person-list" maxlength="60" value="${esc(v.person || '')}" placeholder="Ex.: João, Loja do bairro, tia Maria">
+      <datalist id="person-list">${knownPeople().map((p) => `<option value="${esc(p)}">`).join('')}</datalist></label>` : ''}
 
     ${
       kind === 'transfer'
@@ -160,7 +172,12 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
       let removeReceipt = false;
 
       form.querySelectorAll('[data-kind]').forEach((b) =>
-        b.addEventListener('click', () => openTxForm(b.dataset.kind, null, { date: form.date.value, amount: parseMoney(form.amount.value), desc: form.desc.value })),
+        b.addEventListener('click', () =>
+          openTxForm(b.dataset.kind, null, {
+            date: form.date.value, amount: parseMoney(form.amount.value), desc: form.desc.value, cardId: preset.cardId,
+            person: form.person?.value || preset.person, repeat: form.repeat?.value === 'installments' ? 'installments' : undefined, times: Number(form.times?.value) || preset.times,
+          }),
+        ),
       );
       form.querySelectorAll('[data-date]').forEach((b) =>
         b.addEventListener('click', () => {
@@ -172,21 +189,52 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
       const repeat = form.querySelector('[name=repeat]');
       const instOpts = form.querySelector('[data-inst-opts]');
       const preview = form.querySelector('[data-inst-preview]');
+      const personWrap = form.querySelector('[data-person]');
+      const currentWrap = form.querySelector('[data-current]');
+      const ongoingHint = form.querySelector('[data-ongoing-hint]');
+      const dateLabel = form.querySelector('[data-date-label]');
+      const paidLabel = form.querySelector('[data-paid-label]');
+      const isInst = () => repeat?.value === 'installments';
+      const ongoing = () => isInst() && form.querySelector('[name=progress]:checked')?.value === 'ongoing';
+      const startAt = () => (ongoing() ? Math.min(Math.max(2, Number(form.times.value) || 2), Math.max(2, Number(form.startAt.value) || 2)) : 1);
       const updatePreview = () => {
-        if (!preview || repeat.value !== 'installments') return;
+        if (!preview) return;
+        const inst = isInst();
+        const on = ongoing();
+        if (currentWrap) currentWrap.hidden = !on;
+        if (ongoingHint) ongoingHint.hidden = !on;
+        if (personWrap && !isEdit) personWrap.hidden = !inst && !form.person.value;
+        if (dateLabel) dateLabel.textContent = !inst ? 'Data' : kind === 'card' ? (on ? 'Data (a parcela atual entra na fatura desta data)' : 'Data da compra') : on ? 'Vencimento da parcela atual' : 'Vencimento da 1ª parcela';
+        if (paidLabel && inst) paidLabel.textContent = `${on ? 'Parcela atual' : '1ª parcela'} já ${kind === 'income' ? 'recebida' : 'paga'}`;
+        if (!inst) return;
         const n = Math.max(2, Number(form.times.value) || 2);
         const v = parseMoney(form.amount.value);
-        const per = form.amountMode.value === 'per';
-        const paid = Math.min(n, Number(form.alreadyPaid?.value) || 0);
-        preview.innerHTML = v ? `${n}× de <b>${money(per ? v : v / n)}</b> · total <b>${money(per ? v * n : v)}</b>${paid ? ` · ${paid} paga(s), faltam ${money((per ? v : v / n) * (n - paid))}` : ''}` : '';
+        const per = form.amountMode.value === 'per' ? v : v / n;
+        const k = startAt();
+        const c = kind === 'card' ? card(form.cardId.value) : null;
+        const inv = c && form.date.value ? invoiceFor(c, form.date.value) : null;
+        if (on && ongoingHint)
+          ongoingHint.innerHTML = c
+            ? `Ex.: na fatura do banco aparece <b>04/10</b> → informe 4. A parcela ${k} entra na fatura de <b>${inv ? monthLabel(inv) : '—'}</b>; as parcelas 1 a ${k - 1} ficam no histórico como já pagas, <b>fora das faturas, do limite e dos relatórios</b>.`
+            : `As parcelas 1 a ${k - 1} ficam no histórico como já ${kind === 'income' ? 'recebidas' : 'pagas'}, <b>sem mexer no saldo das contas nem nos relatórios</b>. A parcela ${k} vence na data informada.`;
+        preview.innerHTML = v
+          ? `${n}× de <b>${money(per)}</b> · total <b>${money(per * n)}</b>${k > 1 ? ` · faltam ${n - k + 1} parcela(s), <b>${money(per * (n - k + 1))}</b>` : ''}${inv ? ` · última na fatura de ${monthLabel(addMonths(inv, n - k), { short: true })}` : ''}`
+          : '';
       };
       repeat?.addEventListener('change', () => {
-        form.querySelector('[data-times]').hidden = repeat.value !== 'installments';
-        instOpts.hidden = repeat.value !== 'installments';
+        form.querySelector('[data-times]').hidden = !isInst();
+        instOpts.hidden = !isInst();
+        if (isInst() && form.paid) form.paid.checked = false;
         updatePreview();
       });
-      ['times', 'amountMode', 'alreadyPaid', 'amount'].forEach((n) => form[n]?.addEventListener('input', updatePreview));
-      form.amountMode?.addEventListener('change', updatePreview);
+      form.querySelectorAll('[name=progress]').forEach((r) =>
+        r.addEventListener('change', () => {
+          r.closest('.seg').querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('on', b.contains(r) && r.checked));
+          updatePreview();
+        }),
+      );
+      ['times', 'amountMode', 'startAt', 'amount', 'person'].forEach((n) => form[n]?.addEventListener('input', updatePreview));
+      ['amountMode', 'cardId', 'date'].forEach((n) => form[n]?.addEventListener('change', updatePreview));
       updatePreview();
 
       // subcategorias da categoria escolhida
@@ -271,6 +319,7 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
           data.tags = form.tags.value.split(',').map((t) => t.trim().replace(/^#/, '')).filter(Boolean);
           data.ignored = form.ignored.checked;
         }
+        if (form.person) data.person = form.person.value.trim();
         if (kind === 'card') {
           data.cardId = form.cardId.value;
           data.accountId = null;
@@ -306,9 +355,10 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
         } else {
           const rep = form.repeat?.value || 'none';
           const times = Math.max(2, Number(form.times?.value) || 2);
-          const alreadyPaid = Math.min(times, Math.max(0, Number(form.alreadyPaid?.value) || 0));
-          addTransaction(data, rep, times, { alreadyPaid: rep === 'installments' ? alreadyPaid : 0, perInstallment: rep === 'installments' && form.amountMode?.value === 'per' });
-          toast(rep === 'installments' ? `Compra parcelada em ${times}x criada.` : rep === 'fixed' ? 'Lançamento fixo criado.' : 'Lançamento salvo.');
+          const k = rep === 'installments' ? startAt() : 1;
+          if (rep === 'installments' && Number(form.startAt?.value) > times && ongoing()) return showErr('A parcela atual não pode ser maior que o número de parcelas.');
+          addTransaction(data, rep, times, { startAt: k, perInstallment: rep === 'installments' && form.amountMode?.value === 'per' });
+          toast(rep === 'installments' ? (k > 1 ? `Parcelamento cadastrado a partir da parcela ${k}/${times}.` : `Compra parcelada em ${times}x criada.`) : rep === 'fixed' ? 'Lançamento fixo criado.' : 'Lançamento salvo.');
         }
         closeSheet();
         rerender();

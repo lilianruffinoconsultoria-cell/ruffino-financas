@@ -2,7 +2,7 @@
 import './styles.css';
 import { S, ensureRecurring, applyAutoPay, seedDemo, startFromScratch } from './store.js';
 import { icon, addMonths, thisMonth, sha256, isNative } from './util.js';
-import { UI, ACTIONS, on, setRerender, removeSheet, sheetOpen, closeSheet } from './ui.js';
+import { UI, ACTIONS, on, setRerender, removeSheet, sheetOpen, closeSheet, toast } from './ui.js';
 import { applyTheme } from './theme.js';
 import { LOGO } from './brand.js';
 import './form.js';
@@ -17,6 +17,8 @@ import { renderCalendar } from './views/calendar.js';
 import { renderTags } from './views/tags.js';
 import { renderImport, handleImportInput } from './views/import.js';
 import { renderInstallments } from './views/installments.js';
+import { initCloud, onCloudChange } from './sync.js';
+import { openLogin } from './views/cloud.js';
 
 const ROUTES = [
   [/^#?\/?$/, renderHome, 'home'],
@@ -33,7 +35,7 @@ const ROUTES = [
   [/^#\/calendario$/, renderCalendar, 'more'],
   [/^#\/tags$/, renderTags, 'more'],
   [/^#\/importar$/, renderImport, 'more'],
-  [/^#\/parcelamentos$/, renderInstallments, 'more'],
+  [/^#\/parcelamentos$/, renderInstallments, 'inst'],
 ];
 
 const NAV = [
@@ -42,6 +44,7 @@ const NAV = [
   ['#/planejamento', 'target', 'Planejamento', 'plan'],
   ['#/relatorios', 'chart-pie', 'Relatórios', 'reports'],
   ['#/mais', 'ellipsis', 'Mais', 'more'],
+  ['#/parcelamentos', 'handshake', 'Parcelamentos', 'inst'],
 ];
 
 const app = document.getElementById('app');
@@ -52,13 +55,13 @@ function shell() {
     <aside class="side">
       <a class="brand" href="#/">${LOGO}<span><b>Ruffino</b><em>Finanças</em></span></a>
       <button class="btn primary block" data-action="quick-add">${icon('plus', 18)} Novo lançamento</button>
-      <nav aria-label="Principal">${NAV.map((n) => `<a href="${n[0]}" data-tab="${n[3]}">${icon(n[1], 20)}<span>${n[2]}</span></a>`).join('')}</nav>
+      <nav aria-label="Principal">${[NAV[0], NAV[1], NAV[5], NAV[2], NAV[3], NAV[4]].map((n) => `<a href="${n[0]}" data-tab="${n[3]}">${icon(n[1], 20)}<span>${n[2]}</span></a>`).join('')}</nav>
       <p class="side-foot">Lilian Ruffino<br>Consultoria Empresarial</p>
     </aside>
     <main id="view" class="view" tabindex="-1"></main>
     <nav class="tabbar" aria-label="Principal">${tab(NAV[0])}${tab(NAV[1])}
       <button class="fab" data-action="quick-add" aria-label="Novo lançamento">${icon('plus', 28)}</button>
-      ${tab(NAV[2])}${tab(NAV[4])}</nav>
+      ${tab(NAV[5])}${tab(NAV[4])}</nav>
   </div>`;
 }
 
@@ -156,11 +159,16 @@ function showOnboarding() {
     <label class="field"><span>Como podemos te chamar?</span><input id="ob-name" maxlength="30" placeholder="Seu nome" autocomplete="given-name"></label>
     <button class="btn primary block" data-ob="scratch">Começar do zero</button>
     <button class="btn ghost block" data-ob="demo">Explorar com dados de exemplo</button>
-    <p class="small muted center">${icon('lock', 14)} Seus dados ficam guardados só neste aparelho.</p>
+    <button class="btn ghost block" data-ob="cloud">${icon('cloud', 18)} Já uso em outro aparelho</button>
+    <p class="small muted center">${icon('lock', 14)} Seus dados ficam no aparelho. A sincronização na nuvem é opcional.</p>
   </div>`;
   app.querySelectorAll('[data-ob]').forEach((b) =>
     b.addEventListener('click', () => {
       const name = document.getElementById('ob-name').value.trim();
+      if (b.dataset.ob === 'cloud') {
+        openLogin({ onDone: () => !S.settings.onboarded && toast('Nenhum dado na nuvem para esta conta ainda: comece do zero e eles serão enviados.') });
+        return;
+      }
       if (b.dataset.ob === 'demo') seedDemo(name);
       else startFromScratch(name);
       location.hash = '#/';
@@ -180,10 +188,29 @@ function showLock() {
   const cleanup = pad.mount(app.querySelector('.lock'));
 }
 
+let cloudStarted = false;
 function start() {
   app.innerHTML = shell();
   render();
+  if (!cloudStarted) {
+    cloudStarted = true;
+    initCloud();
+  }
 }
+/** Entra no app respeitando o PIN (usado também quando os dados chegam da nuvem). */
+function enter() {
+  if (sheetOpen()) removeSheet();
+  location.hash = '#/';
+  if (S.settings.pinHash) showLock();
+  else start();
+}
+// dados novos vindos de outro aparelho: aplica tema e redesenha (ou entra, se ainda estava na boas-vindas)
+onCloudChange((what) => {
+  if (what !== 'data') return;
+  applyTheme();
+  if (document.getElementById('view')) render({ keepScroll: true });
+  else if (S.settings.onboarded && !document.querySelector('.lock')) enter();
+})
 
 window.addEventListener('hashchange', () => {
   if (sheetOpen()) removeSheet();

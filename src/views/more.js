@@ -4,12 +4,14 @@ import { esc, icon, uid, today, saveFile, sha256, PICKABLE_ICONS } from '../util
 import { UI, pageHead, catBadge, on, rerender, openSheet, closeSheet, toast, confirmSheet, go } from '../ui.js';
 import { transactionsCsv } from './reports.js';
 import { applyTheme } from '../theme.js';
+import { cloudCard } from './cloud.js';
 
 const MENU = [
   ['#/contas', 'landmark', 'Contas', 'Saldos, reajuste, arquivar e mover lançamentos'],
-  ['#/cartoes', 'credit-card', 'Cartões de crédito', 'Faturas, estorno, antecipação e melhor cartão'],
-  ['#/parcelamentos', 'layers', 'Compras parceladas', 'Carnês, crediários e parcelas no cartão: pagas e quanto falta'],
-  ['#/objetivos', 'target', 'Objetivos', 'Metas de economia com prazo'],
+  ['#/cartoes', 'credit-card', 'Cartões de crédito', 'Faturas, compras parceladas, estorno e antecipação'],
+  ['#/parcelamentos', 'handshake', 'Parcelamentos', 'Com pessoas, lojas, carnês e crediários: a pagar e a receber'],
+  ['#/planejamento', 'target', 'Planejamento', 'Limites do mês por categoria e alertas'],
+  ['#/objetivos', 'piggy-bank', 'Objetivos', 'Metas de economia com prazo'],
   ['#/relatorios', 'chart-column', 'Relatórios', 'DRE do mês, comparativos e evolução'],
   ['#/calendario', 'calendar', 'Calendário', 'Receitas, despesas e pendências por dia'],
   ['#/tags', 'tag', 'Tags e modo viagem', 'Totais por tag e viagem automática'],
@@ -133,9 +135,10 @@ export function renderSettings() {
       <div class="toolbar"><button class="btn ${st.pinHash ? 'ghost' : 'primary'} sm" data-action="pin-set">${icon('lock', 16)} ${st.pinHash ? 'Trocar PIN' : 'Definir PIN'}</button>
         ${st.pinHash ? `<button class="btn ghost danger sm" data-action="pin-remove">Remover PIN</button>` : ''}</div>
     </article>
+    ${cloudCard()}
     <article class="card">
       <header class="card-head"><h2>Dados e backup</h2></header>
-      <p class="muted small">Seus dados ficam guardados somente neste aparelho/navegador. Faça backup com frequência.</p>
+      <p class="muted small">Seus dados ficam guardados neste aparelho e, se a sincronização estiver ligada, também na nuvem. Faça backup com frequência.</p>
       <div class="stack">
         <button class="btn ghost" data-action="backup-export">${icon('database', 18)} Exportar backup (JSON)</button>
         <label class="btn ghost file-btn">${icon('upload', 18)} Restaurar backup<input type="file" accept="application/json,.json" data-input="backup-import" hidden></label>
@@ -144,7 +147,7 @@ export function renderSettings() {
         <button class="btn ghost danger" data-action="reset">${icon('rotate-ccw', 18)} Apagar todos os dados</button>
       </div>
     </article>
-    <p class="about">Ruffino Finanças · versão 1.0<br>Lilian Ruffino Consultoria Empresarial</p>
+    <p class="about">Ruffino Finanças · versão 1.1<br>Lilian Ruffino Consultoria Empresarial</p>
   </section>`;
 }
 

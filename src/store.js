@@ -73,17 +73,23 @@ function load() {
 
 export let S = load();
 
-export function save() {
+const saveListeners = new Set();
+/** Avisa quem precisa saber que os dados mudaram (ex.: sincronização com a nuvem). */
+export const onSave = (fn) => (saveListeners.add(fn), () => saveListeners.delete(fn));
+
+export function save({ silent = false } = {}) {
   try {
     localStorage.setItem(KEY, JSON.stringify(S));
   } catch (e) {
     console.error('Falha ao salvar', e);
   }
+  if (!silent) for (const fn of saveListeners) fn();
 }
 
-export function replaceState(next) {
+/** Troca todos os dados. `silent` não dispara a sincronização (dados que vieram da própria nuvem). */
+export function replaceState(next, { silent = false } = {}) {
   S = migrate(next);
-  save();
+  save({ silent });
 }
 export function resetAll() {
   S = blank();
@@ -108,6 +114,11 @@ export const categoryLabel = (id) => {
 };
 /** Transações ignoradas continuam no saldo, mas ficam fora de relatórios e planejamento. */
 export const counted = (t) => !t.ignored;
+/**
+ * Parcelas anteriores ao controle no app (compra já em andamento quando foi cadastrada):
+ * ficam só no histórico da compra, fora de saldos, faturas, limite e relatórios.
+ */
+export const live = (t) => !t.prior;
 
 /** Escopo de uma transação: Pessoal (pf) ou Empresa (pj), herdado da conta/cartão. */
 export function txScope(t) {
@@ -147,7 +158,7 @@ export function accountBalance(accId, pendingUpTo = null) {
   const a = account(accId);
   let b = a ? Number(a.initial) || 0 : 0;
   for (const t of S.transactions) {
-    if (!t.paid && !(pendingUpTo && t.date <= pendingUpTo)) continue;
+    if (t.prior || (!t.paid && !(pendingUpTo && t.date <= pendingUpTo))) continue;
     const v = t.amount;
     if (t.type === 'income' && t.accountId === accId) b += v;
     else if (t.type === 'expense' && !t.cardId && t.accountId === accId) b -= v;
@@ -167,7 +178,7 @@ export function projectedBalanceAt(scope, iso) {
   const ids = new Set(accs.map((a) => a.id));
   let b = sum(accs, (a) => Number(a.initial) || 0);
   for (const t of S.transactions) {
-    if (t.date > iso) continue;
+    if (t.date > iso || t.prior) continue;
     if (t.type === 'income' && ids.has(t.accountId)) b += t.amount;
     else if ((t.type === 'expense' && !t.cardId) || t.type === 'payment') {
       if (ids.has(t.accountId)) b -= t.amount;
@@ -213,8 +224,9 @@ export const invoiceCloseDate = (c, ym) => dateIn(c.dueDay <= c.closeDay ? addMo
 const CARD_ITEM_TYPES = new Set(['expense', 'refund', 'invoiceAdjust']);
 /** Efeito de um item na fatura: compras somam, estornos subtraem, ajustes têm sinal próprio. */
 export const invoiceEffect = (t) => (t.type === 'refund' ? -t.amount : t.type === 'invoiceAdjust' ? t.delta : t.amount);
+const isCardItem = (t) => CARD_ITEM_TYPES.has(t.type) && !t.prior;
 export const invoiceItems = (cardId, ym) =>
-  S.transactions.filter((t) => CARD_ITEM_TYPES.has(t.type) && t.cardId === cardId && t.invoice === ym).sort((a, b) => b.date.localeCompare(a.date));
+  S.transactions.filter((t) => isCardItem(t) && t.cardId === cardId && t.invoice === ym).sort((a, b) => b.date.localeCompare(a.date));
 export const invoiceTotal = (cardId, ym) => sum(invoiceItems(cardId, ym), invoiceEffect);
 export const invoicePaid = (cardId, ym) =>
   sum(S.transactions.filter((t) => t.type === 'payment' && t.cardId === cardId && t.invoice === ym), (t) => t.amount);
@@ -229,7 +241,7 @@ export function invoiceStatus(c, ym) {
 }
 export const currentInvoice = (c) => invoiceFor(c, today());
 export function cardUsed(cardId) {
-  const spent = sum(S.transactions.filter((t) => CARD_ITEM_TYPES.has(t.type) && t.cardId === cardId), invoiceEffect);
+  const spent = sum(S.transactions.filter((t) => isCardItem(t) && t.cardId === cardId), invoiceEffect);
   const paid = sum(S.transactions.filter((t) => t.type === 'payment' && t.cardId === cardId), (t) => t.amount);
   return Math.max(0, round2(spent - paid));
 }
@@ -245,7 +257,7 @@ export function bestCard(scope = 'all') {
 }
 /** Parcelas futuras de compras no cartão que podem ser antecipadas para a fatura informada. */
 export const anticipatable = (cardId, targetYm) =>
-  S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.installment && t.invoice > targetYm).sort((a, b) => a.invoice.localeCompare(b.invoice));
+  S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.installment && !t.prior && t.invoice > targetYm).sort((a, b) => a.invoice.localeCompare(b.invoice));
 export function anticipate(ids, targetYm) {
   for (const t of S.transactions) if (ids.includes(t.id)) {
     t.invoice = targetYm;
@@ -253,9 +265,23 @@ export function anticipate(ids, targetYm) {
   }
   save();
 }
+/** Composição da fatura: compras à vista, parcelas do mês e créditos (estornos/ajustes). */
+export function invoiceBreakdown(cardId, ym) {
+  const items = invoiceItems(cardId, ym);
+  const exp = items.filter((t) => t.type === 'expense');
+  return {
+    single: sum(exp.filter((t) => !t.installment), (t) => t.amount),
+    installments: sum(exp.filter((t) => t.installment), (t) => t.amount),
+    installmentCount: exp.filter((t) => t.installment).length,
+    other: sum(items.filter((t) => t.type !== 'expense'), invoiceEffect),
+  };
+}
+/** Parcelas que ainda vão entrar em faturas depois da informada (já ocupam o limite, mas não esta fatura). */
+export const futureInstallments = (cardId, ym) =>
+  sum(S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.installment && !t.prior && t.invoice > ym), (t) => t.amount);
 
 // ---------- resumos do mês ----------
-export const monthTx = (ym, scope) => S.transactions.filter((t) => monthOf(t.date) === ym && inScope(t, scope));
+export const monthTx = (ym, scope) => S.transactions.filter((t) => !t.prior && monthOf(t.date) === ym && inScope(t, scope));
 
 export function monthSummary(ym, scope) {
   const list = monthTx(ym, scope).filter(counted);
@@ -323,29 +349,35 @@ export function editableBudget(ym) {
 /**
  * Cria uma transação. `repeat`: 'none' | 'fixed' (mensal, gerada 12 meses à frente
  * e estendida conforme o uso) | 'installments' (parcelada em `times` vezes).
- * Parcelado fora do cartão: `alreadyPaid` marca as primeiras parcelas como pagas (compra já em
- * andamento) e `perInstallment` indica que `base.amount` é o valor de cada parcela, não o total.
+ * Parceladas:
+ * - `perInstallment`: `base.amount` é o valor de cada parcela, não o total.
+ * - `startAt`: número da parcela que cai na data informada (compra já em andamento).
+ *   No cartão, essa parcela entra na fatura da data; fora dele, vence na data.
+ *   As parcelas anteriores ficam marcadas como `prior` (já pagas antes do controle no app):
+ *   aparecem no histórico da compra, mas não mexem em saldo, fatura, limite nem relatórios.
  */
-export function addTransaction(base, repeat = 'none', times = 1, { alreadyPaid = 0, perInstallment = false } = {}) {
+export function addTransaction(base, repeat = 'none', times = 1, { perInstallment = false, startAt = 1 } = {}) {
   const groupId = repeat === 'none' ? null : uid();
   const n = repeat === 'installments' ? Math.max(2, times) : repeat === 'fixed' ? 12 : 1;
+  const k = repeat === 'installments' ? Math.min(n, Math.max(1, Math.floor(startAt) || 1)) : 1;
   const total = repeat === 'installments' && perInstallment ? round2(base.amount * n) : base.amount;
   const per = repeat === 'installments' ? (perInstallment ? base.amount : round2(Math.floor((total / n) * 100) / 100)) : base.amount;
   const c = base.cardId ? card(base.cardId) : null;
-  const firstInvoice = c ? invoiceFor(c, base.date) : null;
+  const baseInvoice = c ? invoiceFor(c, base.date) : null;
   const created = [];
   for (let i = 0; i < n; i++) {
-    const t = { ...base, id: uid(), date: shiftDate(base.date, i), groupId };
+    const offset = i - (k - 1); // meses em relação à data informada
+    const t = { ...base, id: uid(), date: shiftDate(base.date, offset), groupId };
     if (repeat === 'installments') {
       t.amount = i === 0 ? round2(total - per * (n - 1)) : per;
       t.installment = { n: i + 1, total: n };
     }
     if (repeat === 'fixed') t.fixed = true;
     if (c) {
-      t.invoice = addMonths(firstInvoice, i);
+      t.invoice = addMonths(baseInvoice, offset);
       t.paid = true;
-    } else if (alreadyPaid) t.paid = i < alreadyPaid;
-    else if (i > 0) t.paid = false;
+    } else if (offset > 0) t.paid = false;
+    if (offset < 0) Object.assign(t, { prior: true, paid: true });
     S.transactions.push(t);
     created.push(t);
   }
@@ -381,7 +413,7 @@ export function updateTransaction(id, fields, applyToFuture = false) {
   if (!t) return;
   const prevDate = t.date;
   Object.assign(t, fields);
-  if (t.cardId && !t.anticipated) t.invoice = fields.invoice || invoiceFor(card(t.cardId), t.date);
+  if (t.cardId && !t.anticipated && !t.prior) t.invoice = fields.invoice || invoiceFor(card(t.cardId), t.date);
   if (applyToFuture && t.groupId) {
     const shared = { ...fields };
     for (const k of ['date', 'paid', 'invoice', 'receipt']) delete shared[k];
@@ -437,10 +469,11 @@ export function allTags() {
 
 // ---------- compras parceladas ----------
 /**
- * Parcela paga: fora do cartão, quando marcada como paga; no cartão, quando a fatura
- * dela foi paga ou já venceu (compras antigas lançadas depois continuam corretas).
+ * Parcela paga: anteriores ao app sempre; fora do cartão, quando marcada como paga; no cartão,
+ * quando a fatura dela foi paga ou já venceu (compras antigas lançadas depois continuam corretas).
  */
 export function installmentPaid(t) {
+  if (t.prior) return true;
   if (!t.cardId) return !!t.paid;
   const c = card(t.cardId);
   return !!c && (invoiceStatus(c, t.invoice) === 'paga' || invoiceDueDate(c, t.invoice) < today());
@@ -448,11 +481,19 @@ export function installmentPaid(t) {
 /** Data em que a parcela é cobrada: vencimento da fatura (cartão) ou a data do lançamento. */
 export const installmentDue = (t) => (t.cardId && card(t.cardId) ? invoiceDueDate(card(t.cardId), t.invoice) : t.date);
 
-/** Uma linha por compra parcelada, com parcelas pagas, valor pago, restante e próxima parcela. */
-export function installmentGroups(scope = 'all') {
+/**
+ * Uma linha por compra parcelada, com parcelas pagas, valor pago, restante e próxima parcela.
+ * `where`: 'all' | 'card' | 'outside'; `cardId` limita a um cartão.
+ * Fora do cartão também entram as receitas parceladas (dinheiro a receber de alguém).
+ */
+export function installmentGroups(scope = 'all', { where = 'all', cardId = null } = {}) {
   const map = new Map();
   for (const t of S.transactions) {
-    if (t.type !== 'expense' || !t.installment || !t.groupId || !inScope(t, scope)) continue;
+    if ((t.type !== 'expense' && t.type !== 'income') || !t.installment || !t.groupId || !inScope(t, scope)) continue;
+    if (t.type === 'income' && t.cardId) continue;
+    if (where === 'card' && !t.cardId) continue;
+    if (where === 'outside' && t.cardId) continue;
+    if (cardId && t.cardId !== cardId) continue;
     if (!map.has(t.groupId)) map.set(t.groupId, []);
     map.get(t.groupId).push(t);
   }
@@ -461,29 +502,84 @@ export function installmentGroups(scope = 'all') {
     const paid = list.filter(installmentPaid);
     const open = list.filter((t) => !installmentPaid(t)).sort((a, b) => installmentDue(a).localeCompare(installmentDue(b)));
     const first = list[0];
+    const last = list[list.length - 1];
     const total = sum(list, (t) => t.amount);
     const paidValue = sum(paid, (t) => t.amount);
+    const person = list.map((t) => t.person).find(Boolean) || '';
     return {
       groupId,
       list,
-      desc: first.desc || category(first.categoryId).name,
+      desc: first.desc || person || category(first.categoryId).name,
       categoryId: first.categoryId,
       cardId: first.cardId || null,
-      accountId: first.accountId || null,
+      accountId: (open[0] || last).accountId || null,
+      person,
+      dir: first.type === 'income' ? 'receive' : 'pay',
       n: first.installment.total,
       count: list.length,
       paidCount: paid.length,
+      priorCount: list.filter((t) => t.prior).length,
       total,
       paidValue,
       remaining: round2(total - paidValue),
-      per: list[list.length - 1].originalAmount || list[list.length - 1].amount,
+      per: last.originalAmount || last.amount,
       next: open[0] || null,
       start: first.date,
-      end: installmentDue(list[list.length - 1]),
+      end: installmentDue(last),
       discount: sum(list, (t) => (t.originalAmount ? t.originalAmount - t.amount : 0)),
+      late: open.filter((t) => installmentDue(t) < today()).length,
       done: !open.length,
     };
   });
+}
+/** Parcela de uma compra do cartão que cai numa fatura (ou null). */
+export const installmentIn = (g, ym) => g.list.find((t) => !t.prior && t.invoice === ym) || null;
+
+/** Pessoas/lojas com parcelamentos fora do cartão: quanto falta pagar e receber de cada uma. */
+export function installmentPeople(scope = 'all') {
+  const map = new Map();
+  for (const g of installmentGroups(scope, { where: 'outside' })) {
+    const name = g.person || 'Sem pessoa informada';
+    const key = name.toLowerCase();
+    if (!map.has(key)) map.set(key, { name, pay: 0, receive: 0, active: 0, late: 0, groups: [] });
+    const p = map.get(key);
+    p[g.dir] = round2(p[g.dir] + g.remaining);
+    if (!g.done) p.active++;
+    p.late += g.late;
+    p.groups.push(g);
+  }
+  return [...map.values()].sort((a, b) => b.pay + b.receive - (a.pay + a.receive));
+}
+export function knownPeople() {
+  const set = new Map();
+  for (const t of S.transactions) if (t.person) set.set(t.person.toLowerCase(), t.person);
+  return [...set.values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+/**
+ * Registra o pagamento (ou recebimento) de uma parcela fora do cartão: valor efetivo, conta e data.
+ * Se o valor for diferente do previsto (juros, desconto), o previsto fica guardado em `originalAmount`.
+ */
+export function payInstallment(id, { amount, accountId, date = today() } = {}) {
+  const t = byId(S.transactions, id);
+  if (!t || t.cardId || t.prior) return null;
+  if (amount && Math.abs(amount - t.amount) > 0.004) {
+    if (!t.originalAmount) t.originalAmount = t.amount;
+    t.amount = round2(amount);
+  }
+  Object.assign(t, { paid: true, date, accountId: accountId || t.accountId });
+  save();
+  return t;
+}
+export function unpayInstallment(id) {
+  const t = byId(S.transactions, id);
+  if (!t || t.cardId || t.prior) return;
+  t.paid = false;
+  if (t.originalAmount) {
+    t.amount = t.originalAmount;
+    delete t.originalAmount;
+  }
+  save();
 }
 
 /** Marca como paga a próxima parcela em aberto de uma compra fora do cartão. */
@@ -577,6 +673,10 @@ export function seedDemo(name = '') {
   // compras parceladas fora do cartão: carnê em andamento (valor por parcela) e curso no boleto
   addTransaction(t({ type: 'expense', amount: 189.9, desc: 'Geladeira (carnê)', date: dateIn(addMonths(thisMonth(), -4), 10), categoryId: cat('Casa'), accountId: bank.id }), 'installments', 12, { perInstallment: true });
   addTransaction(t({ type: 'expense', amount: 5400, desc: 'Curso de pós-graduação', date: d(1, 15), categoryId: cat('Educação'), accountId: bank.id, tags: ['educação'] }), 'installments', 18);
+  // parcelamentos com pessoas (a pagar e a receber) e compra no cartão que já estava em andamento
+  addTransaction(t({ type: 'expense', amount: 350, desc: 'Moto usada', person: 'Carlos', date: dateIn(thisMonth(), 15), categoryId: cat('Transporte'), accountId: bank.id }), 'installments', 10, { startAt: 4, perInstallment: true });
+  addTransaction(t({ type: 'income', amount: 1200, desc: 'Notebook antigo', person: 'Ana', date: dateIn(addMonths(thisMonth(), -1), 20), categoryId: cat('Vendas e serviços', 'income'), accountId: bank.id }), 'installments', 4);
+  addTransaction(t({ type: 'expense', amount: 189, desc: 'Sofá retrátil', date: today(), categoryId: cat('Casa'), cardId: roxo.id }), 'installments', 12, { startAt: 7, perInstallment: true });
 
   // paga as faturas já vencidas dos cartões
   for (const c of S.cards)

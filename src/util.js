@@ -7,7 +7,7 @@ import {
   Wifi, Coins, CircleHelp, ArrowUp, ArrowDown, Repeat, Layers, ChartColumn, FileText, Lightbulb, Building2, User,
   Delete, CircleCheck, Circle, Info, Sparkles, HandCoins, CalendarClock, Clock, Shield, Palette, Music, Bus, Pill,
   Scissors, Sofa, Laptop, Popcorn, Package, ShoppingBag, Heart, Rocket, Star, ScrollText, Scale, MessageCircle,
-  Database, RotateCcw, Contrast,
+  Database, RotateCcw, Contrast, Handshake, UserRound, ArrowUpRight, ArrowDownLeft, TriangleAlert, Cloud, CloudOff, RefreshCw, LogOut, Mail, KeyRound,
 } from 'lucide';
 import { Capacitor } from '@capacitor/core';
 
@@ -19,7 +19,7 @@ const L = {
   Wifi, Coins, CircleHelp, ArrowUp, ArrowDown, Repeat, Layers, ChartColumn, FileText, Lightbulb, Building2, User,
   Delete, CircleCheck, Circle, Info, Sparkles, HandCoins, CalendarClock, Clock, Shield, Palette, Music, Bus, Pill,
   Scissors, Sofa, Laptop, Popcorn, Package, ShoppingBag, Heart, Rocket, Star, ScrollText, Scale, MessageCircle,
-  Database, RotateCcw, Contrast,
+  Database, RotateCcw, Contrast, Handshake, UserRound, ArrowUpRight, ArrowDownLeft, TriangleAlert, Cloud, CloudOff, RefreshCw, LogOut, Mail, KeyRound,
 };
 
 /** Ícones que o usuário pode escolher para categorias e objetivos. */

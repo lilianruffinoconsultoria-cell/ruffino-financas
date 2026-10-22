@@ -14,7 +14,8 @@ function txMeta(t) {
   if (t.type === 'refund') return `Estorno · ${esc(card(t.cardId)?.name || '')}`;
   if (t.type === 'invoiceAdjust') return `Ajuste de fatura · ${esc(card(t.cardId)?.name || '')}`;
   const parts = [esc(categoryLabel(t.categoryId)), t.cardId ? esc(card(t.cardId)?.name || 'Cartão') : esc(account(t.accountId)?.name || '')];
-  if (t.installment) parts.push(`${t.installment.n}/${t.installment.total}`);
+  if (t.person) parts.push(`${t.type === 'income' ? 'de' : 'para'} ${esc(t.person)}`);
+  if (t.installment) parts.push(`parcela ${t.installment.n}/${t.installment.total}`);
   if (t.fixed) parts.push('fixa');
   return parts.join(' · ');
 }
@@ -48,7 +49,7 @@ export function txRow(t, { showDate = false } = {}) {
 
 export function filteredTransactions() {
   const q = UI.txQuery.trim().toLowerCase();
-  let list = q || TXF.tag ? S.transactions.filter((t) => inScope(t, UI.scope)) : monthTx(UI.month, UI.scope);
+  let list = q || TXF.tag ? S.transactions.filter((t) => !t.prior && inScope(t, UI.scope)) : monthTx(UI.month, UI.scope);
   if (q)
     list = list.filter((t) =>
       [t.desc, t.note, categoryLabel(t.categoryId), ...(t.tags || [])].some((s) => String(s || '').toLowerCase().includes(q)) ||

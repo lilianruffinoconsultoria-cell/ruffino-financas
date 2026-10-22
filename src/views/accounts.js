@@ -2,10 +2,10 @@
 import {
   S, save, account, card, accountBalance, ACCOUNT_TYPES, ACCOUNT_ICONS, SCOPES, COLORS, currentInvoice, invoiceItems, invoiceTotal,
   invoicePaid, invoiceStatus, invoiceDueDate, invoiceCloseDate, cardUsed, accountsIn, cardsIn, bestCard, daysToDue, anticipatable,
-  anticipate, adjustBalanceWithTransaction, moveTransactions,
+  anticipate, adjustBalanceWithTransaction, moveTransactions, invoiceBreakdown, futureInstallments, installmentGroups, installmentIn, category,
 } from '../store.js';
 import { esc, icon, uid, parseMoney, moneyPlain, monthEnd, thisMonth, monthLabel, addMonths, shortDate, today, round2 } from '../util.js';
-import { UI, $m, pageHead, scopeChips, progress, empty, on, rerender, openSheet, closeSheet, toast, confirmSheet, go } from '../ui.js';
+import { UI, $m, pageHead, scopeChips, progress, empty, on, rerender, openSheet, closeSheet, toast, confirmSheet, go, catBadge } from '../ui.js';
 import { txRow } from './transactions.js';
 import { openTxForm, openRefund } from '../form.js';
 
@@ -132,11 +132,14 @@ const dueText = (d) => (d > 1 ? `vence em ${d} dias` : d === 1 ? 'vence amanhã'
 function cardTile(c) {
   const inv = currentInvoice(c);
   const used = cardUsed(c.id);
+  const inst = installmentGroups('all', { cardId: c.id }).filter((g) => !g.done);
+  const future = futureInstallments(c.id, inv);
   return `<a class="credit-card" href="#/cartao/${c.id}" style="--c:${c.color}">
     <div class="cc-top"><b>${esc(c.name)}</b>${icon('credit-card', 22)}</div>
     <div><small>Fatura atual · ${monthLabel(inv, { short: true })} · ${dueText(daysToDue(c, inv))}</small><p class="cc-v">${$m(invoiceTotal(c.id, inv))}</p></div>
     <div class="cc-foot"><span>Fecha dia ${c.closeDay}</span><span>Vence dia ${c.dueDay}</span></div>
-    ${progress(used, c.limit)}<small>Disponível ${$m(c.limit - used)} de ${$m(c.limit)}</small></a>`;
+    ${progress(used, c.limit)}<small>Disponível ${$m(c.limit - used)} de ${$m(c.limit)}</small>
+    ${inst.length ? `<small class="cc-inst">${icon('layers', 12)} ${inst.length} compra(s) parcelada(s) · ${$m(future)} em faturas futuras</small>` : ''}</a>`;
 }
 
 export function renderCards() {
@@ -148,7 +151,8 @@ export function renderCards() {
     ${scopeChips()}
     ${best ? `<div class="best-card">${icon('star', 18)}<span>O melhor cartão para comprar hoje é o <b>${esc(best.card.name)}</b>: a compra só vence em <b>${best.days} dias</b> (${shortDate(invoiceDueDate(best.card, currentInvoice(best.card)))}).</span></div>` : ''}
     ${list.length ? `<div class="grid">${list.map(cardTile).join('')}</div>` : `<article class="card">${empty('credit-card', 'Nenhum cartão', 'Cadastre seus cartões para acompanhar faturas e limite disponível.')}</article>`}
-    <a class="menu-item" href="#/parcelamentos"><span class="menu-ic">${icon('layers', 22)}</span><span><b>Compras parceladas</b><small>Parcelas pagas, total e quanto falta de cada compra</small></span>${icon('chevron-right', 18, 'muted')}</a>
+    <p class="hint">${icon('info', 14)} As compras parceladas de cada cartão ficam dentro dele, junto da fatura.</p>
+    <a class="menu-item" href="#/parcelamentos"><span class="menu-ic">${icon('handshake', 22)}</span><span><b>Parcelamentos com pessoas e lojas</b><small>Fora do cartão: carnês, crediários, Pix parcelado, a pagar e a receber</small></span>${icon('chevron-right', 18, 'muted')}</a>
     ${archived.length ? `<details class="card"><summary class="card-head"><h2>Arquivados (${archived.length})</h2></summary><div class="grid">${archived.map(cardTile).join('')}</div></details>` : ''}
   </section>`;
 }
@@ -206,16 +210,37 @@ function cardForm(c) {
   });
 }
 
+/** Linha de uma compra parcelada dentro do cartão, mostrando a parcela que cai na fatura visualizada. */
+function cardInstRow(g, ym) {
+  const here = installmentIn(g, ym);
+  const after = g.list.filter((t) => !t.prior && t.invoice > ym);
+  const left = after.reduce((a, t) => a + t.amount, 0);
+  const nextInv = after[0]?.invoice;
+  return `<li><button class="row col linklike inst" data-action="inst-open" data-id="${g.groupId}">
+    <div class="row-in">${catBadge(category(g.categoryId), 36)}
+      <span class="grow"><b>${esc(g.desc)}</b><small>${here ? `Parcela <b>${here.installment.n}/${g.n}</b> nesta fatura · ${$m(here.amount)}` : nextInv ? `Sem parcela nesta fatura · próxima em ${monthLabel(nextInv, { short: true })}` : 'Sem parcelas a partir desta fatura'}</small></span>
+      <span class="num-col"><span class="num">${$m(left)}</span><small>${after.length ? `${after.length} parcela(s) depois` : g.done ? 'quitada' : 'última'}</small></span></div>
+    ${progress(g.paidValue, g.total, { warn: 2 })}
+  </button></li>`;
+}
+
 export function renderCardDetail(id) {
   const c = card(id);
   if (!c) return `<section>${pageHead('Cartão', { back: '#/cartoes' })}${empty('credit-card', 'Cartão não encontrado', '')}</section>`;
   const ym = UI.invoice[id] || currentInvoice(c);
-  const items = invoiceItems(id, ym);
+  const allItems = invoiceItems(id, ym);
+  const filter = UI.invItems || 'all';
+  const items = allItems.filter((t) => filter === 'all' || (filter === 'inst' ? t.installment : !t.installment));
   const total = invoiceTotal(id, ym);
   const paid = invoicePaid(id, ym);
   const st = invoiceStatus(c, ym);
   const used = cardUsed(id);
   const d = daysToDue(c, ym);
+  const bd = invoiceBreakdown(id, ym);
+  const future = futureInstallments(id, ym);
+  const groups = installmentGroups('all', { cardId: id })
+    .filter((g) => installmentIn(g, ym) || g.list.some((t) => !t.prior && t.invoice > ym))
+    .sort((a, b) => !!installmentIn(b, ym) - !!installmentIn(a, ym) || b.remaining - a.remaining);
   const payments = S.transactions.filter((t) => t.type === 'payment' && t.cardId === id && t.invoice === ym);
   return `<section>
     ${pageHead(c.name, { back: '#/cartoes', right: `<button class="icon-btn" data-action="card-form" data-id="${c.id}" aria-label="Editar cartão">${icon('pencil')}</button>` })}
@@ -230,9 +255,15 @@ export function renderCardDetail(id) {
       <div class="cc-foot"><span>Fecha ${shortDate(invoiceCloseDate(c, ym)).slice(0, 5)}</span><span>Vence ${shortDate(invoiceDueDate(c, ym)).slice(0, 5)}</span></div>
       ${progress(used, c.limit)}<small>Limite disponível ${$m(c.limit - used)} de ${$m(c.limit)}</small>
     </article>
+    <div class="summary-strip">
+      <div><small>Compras à vista</small><b>${$m(bd.single)}</b></div>
+      <div><small>Parcelas (${bd.installmentCount})</small><b>${$m(bd.installments)}</b></div>
+      <div><small>${bd.other < 0 ? 'Estornos/ajustes' : 'Ajustes'}</small><b class="${bd.other < 0 ? 'pos' : ''}">${$m(bd.other)}</b></div>
+    </div>
     <div class="toolbar">
       <button class="btn primary" data-action="pay-invoice" data-id="${id}" ${total - paid <= 0.004 ? 'disabled' : ''}>${icon('hand-coins', 18)} Pagar fatura</button>
       <button class="btn ghost" data-action="new-card-expense" data-id="${id}">${icon('plus', 18)} Despesa</button>
+      <button class="btn ghost" data-action="new-card-inst" data-id="${id}">${icon('layers', 18)} Parcelada</button>
     </div>
     <div class="chips scroll">
       <button class="chip" data-action="card-refund" data-id="${id}">${icon('rotate-ccw', 14)} Lançar estorno</button>
@@ -240,7 +271,14 @@ export function renderCardDetail(id) {
       <button class="chip" data-action="card-anticipate" data-id="${id}">${icon('calendar-clock', 14)} Antecipar parcelas</button>
     </div>
     <article class="card">
+      <header class="card-head"><h2>Compras parceladas</h2><span class="muted small">${groups.length} ativa(s)</span></header>
+      ${groups.length ? `<p class="hint">Nesta fatura entram só as parcelas do mês (<b>${$m(bd.installments)}</b>). Faltam <b>${$m(future)}</b> em faturas futuras: isso ocupa o limite, mas não soma nesta fatura.</p>
+        <ul class="list">${groups.map((g) => cardInstRow(g, ym)).join('')}</ul>`
+        : empty('layers', 'Nenhuma compra parcelada', 'Compras parceladas neste cartão aparecem aqui, com a parcela de cada fatura e quanto falta.', `<button class="btn primary sm" data-action="new-card-inst" data-id="${id}">Lançar compra parcelada</button>`)}
+    </article>
+    <article class="card">
       <header class="card-head"><h2>Lançamentos</h2><span class="muted small">${items.length} item(ns)</span></header>
+      <div class="chips small">${[['all', 'Todos'], ['single', 'À vista'], ['inst', 'Parcelas']].map(([v, l]) => `<button class="chip ${filter === v ? 'on' : ''}" data-action="inv-items" data-v="${v}">${l}</button>`).join('')}</div>
       ${items.length ? `<ul class="list">${items.map((t) => txRow(t, { showDate: true })).join('')}</ul>` : empty('receipt', 'Fatura sem lançamentos', 'As compras deste período aparecerão aqui.')}
     </article>
     ${payments.length ? `<article class="card"><header class="card-head"><h2>Pagamentos</h2></header><ul class="list">${payments.map((p) => `
@@ -261,6 +299,8 @@ on({
     rerender();
   },
   'new-card-expense': (el) => openTxForm('card', null, { cardId: el.dataset.id }),
+  'new-card-inst': (el) => openTxForm('card', null, { cardId: el.dataset.id, repeat: 'installments', times: 10 }),
+  'inv-items': (el) => ((UI.invItems = el.dataset.v), rerender()),
   'card-refund': (el) => openRefund(el.dataset.id),
   'card-adjust': (el) => {
     const c = card(el.dataset.id);

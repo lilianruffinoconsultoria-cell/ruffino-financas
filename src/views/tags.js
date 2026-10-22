@@ -6,7 +6,7 @@ import { UI, $m, pageHead, scopeChips, empty, on, rerender, openSheet, closeShee
 function totals(tag) {
   const r = { month: { inc: 0, exp: 0 }, all: { inc: 0, exp: 0 }, n: 0 };
   for (const t of S.transactions) {
-    if (!(t.tags || []).includes(tag) || !counted(t) || !inScope(t, UI.scope)) continue;
+    if (!(t.tags || []).includes(tag) || !counted(t) || t.prior || !inScope(t, UI.scope)) continue;
     r.n++;
     const k = t.type === 'income' ? 'inc' : t.type === 'expense' ? 'exp' : null;
     if (!k) continue;
