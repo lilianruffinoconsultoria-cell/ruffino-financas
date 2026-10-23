@@ -1,5 +1,5 @@
 // Lista de transações do mês, com busca, filtros por tipo, situação, conta, categoria e tag.
-import { S, category, categoryLabel, account, card, monthTx, inScope, monthSummary, togglePaid, rootId, categoriesOf, allTags, counted } from '../store.js';
+import { S, isNeutral, CATEGORY_TYPES, category, categoryLabel, account, card, monthTx, inScope, monthSummary, togglePaid, rootId, categoriesOf, allTags, counted } from '../store.js';
 import { esc, icon, dayLabel, shortDate, round2 } from '../util.js';
 import { UI, $m, monthSwitcher, scopeChips, catBadge, empty, on, rerender, toast, openSheet, closeSheet } from '../ui.js';
 
@@ -35,7 +35,7 @@ export function txRow(t, { showDate = false } = {}) {
   const sign = credit ? '+' : t.type === 'transfer' ? '' : '−';
   const value = t.type === 'invoiceAdjust' ? Math.abs(t.delta) : t.amount;
   const canToggle = (t.type === 'income' || t.type === 'expense' || t.type === 'transfer') && !t.cardId;
-  const badges = [t.ignored ? '<span class="tag-badge">ignorada</span>' : '', t.receipt ? icon('file-text', 13, 'muted') : '', t.anticipated ? '<span class="tag-badge">antecipada</span>' : ''].join('');
+  const badges = [t.ignored ? '<span class="tag-badge">ignorada</span>' : '', isNeutral(t) ? `<span class="tag-badge">${category(category(t.categoryId).parentId || t.categoryId).type === 'refund' ? 'reembolso' : 'transferência'}</span>` : '', t.receipt ? icon('file-text', 13, 'muted') : '', t.anticipated ? '<span class="tag-badge">antecipada</span>' : ''].join('');
   return `<li class="row tx ${t.ignored ? 'is-ignored' : ''}">
     ${catBadge(c, 38)}
     <button class="grow linklike" data-action="edit-tx" data-id="${t.id}">
@@ -100,11 +100,11 @@ export function renderTransactions() {
 
 function openFilters() {
   const holders = [...S.accounts.map((a) => [a.id, a.name]), ...S.cards.map((c) => [c.id, `${c.name} (cartão)`])];
-  const cats = [...categoriesOf('expense'), ...categoriesOf('income')];
+  const cats = ['expense', 'income', 'transfer', 'refund'].flatMap((k) => categoriesOf(k));
   openSheet(`<form class="tx-form"><h2 class="sheet-title">${icon('layers', 20)} Filtrar transações</h2>
     <div class="field"><span>Situação</span><div class="chips">${STATUS.map(([v, l]) => `<label class="chip ${TXF.status === v ? 'on' : ''}"><input type="radio" name="status" value="${v}" ${TXF.status === v ? 'checked' : ''} hidden>${l}</label>`).join('')}</div></div>
     <label class="field"><span>Conta ou cartão</span><select name="holder"><option value="">Todos</option>${holders.map(([id, n]) => `<option value="${id}" ${TXF.holder === id ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
-    <label class="field"><span>Categoria</span><select name="cat"><option value="">Todas</option>${cats.map((c) => `<option value="${c.id}" ${TXF.cat === c.id ? 'selected' : ''}>${esc(c.name)} (${c.type === 'income' ? 'receita' : 'despesa'})</option>`).join('')}</select></label>
+    <label class="field"><span>Categoria</span><select name="cat"><option value="">Todas</option>${cats.map((c) => `<option value="${c.id}" ${TXF.cat === c.id ? 'selected' : ''}>${esc(c.name)} (${CATEGORY_TYPES[c.type].toLowerCase()})</option>`).join('')}</select></label>
     <label class="field"><span>Tag <small>(mostra todos os meses)</small></span><select name="tag"><option value="">Todas</option>${allTags().map((t) => `<option ${TXF.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
     <div class="form-actions"><button type="button" class="btn ghost" data-clear>Limpar</button><button class="btn primary">${icon('check', 18)} Aplicar</button></div></form>`, {
     onMount(sheet) {

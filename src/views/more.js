@@ -1,5 +1,5 @@
 // Menu "Mais", gestão de categorias e configurações (tema, PIN, backup, dados de exemplo).
-import { S, save, replaceState, resetAll, seedDemo, category, categoriesOf, subcategoriesOf, COLORS } from '../store.js';
+import { S, save, replaceState, resetAll, seedDemo, category, categoriesOf, subcategoriesOf, COLORS, CATEGORY_TYPES, NEUTRAL_TYPES } from '../store.js';
 import { esc, icon, uid, today, saveFile, sha256, PICKABLE_ICONS } from '../util.js';
 import { UI, pageHead, catBadge, on, rerender, openSheet, closeSheet, toast, confirmSheet, go } from '../ui.js';
 import { transactionsCsv } from './reports.js';
@@ -41,8 +41,11 @@ export function renderCategories() {
   const archived = categoriesOf(UI.catTab, { archived: true });
   return `<section>
     ${pageHead('Categorias', { back: '#/mais', right: `<button class="btn primary sm" data-action="cat-form">${icon('plus', 16)} Nova</button>` })}
-    <div class="chips">${[['expense', 'Despesas'], ['income', 'Receitas']].map(([v, l]) => `<button class="chip ${UI.catTab === v ? 'on' : ''}" data-action="cat-tab" data-v="${v}">${l}</button>`).join('')}</div>
-    <article class="card"><ul class="list">${list.map(catRow).join('')}</ul></article>
+    <div class="chips scroll">${Object.entries(CATEGORY_TYPES).map(([v, l]) => `<button class="chip ${UI.catTab === v ? 'on' : ''}" data-action="cat-tab" data-v="${v}">${l}</button>`).join('')}</div>
+    ${NEUTRAL_TYPES[UI.catTab] ? `<p class="badge-line">${icon('info', 14)} ${UI.catTab === 'transfer'
+      ? 'Use em entradas e saídas que só mudam o dinheiro de lugar (aplicação, resgate, empréstimo, Pix para você mesma). Elas mexem no saldo da conta, mas não contam como receita nem despesa.'
+      : 'Use quando alguém devolve um gasto seu (empresa, cliente, amigo) ou quando você devolve um valor. Mexe no saldo, mas não infla suas receitas nem suas despesas.'}</p>` : ''}
+    <article class="card">${list.length ? `<ul class="list">${list.map(catRow).join('')}</ul>` : `<p class="muted small">Nenhuma categoria aqui ainda. Toque em “Nova”.</p>`}</article>
     ${archived.length ? `<details class="card"><summary class="card-head"><h2>Arquivadas (${archived.length})</h2></summary><ul class="list">${archived.map(catRow).join('')}</ul></details>` : ''}
   </section>`;
 }
@@ -53,7 +56,7 @@ function categoryForm(c, parentId = null) {
   const isSub = !!(isEdit ? c.parentId : parentId);
   const v = c || { type: isSub ? parent.type : UI.catTab, icon: isSub ? parent.icon : 'tag', color: isSub ? parent.color : COLORS[S.categories.length % COLORS.length], parentId };
   if (!PICKABLE_ICONS.includes(v.icon) && v.icon !== 'tag') PICKABLE_ICONS.push(v.icon);
-  openSheet(`<form class="tx-form"><h2 class="sheet-title">${isEdit ? (isSub ? 'Editar subcategoria' : 'Editar categoria') : isSub ? `Nova subcategoria de ${esc(parent.name)}` : `Nova categoria de ${v.type === 'income' ? 'receita' : 'despesa'}`}</h2>
+  openSheet(`<form class="tx-form"><h2 class="sheet-title">${isEdit ? (isSub ? 'Editar subcategoria' : 'Editar categoria') : isSub ? `Nova subcategoria de ${esc(parent.name)}` : `Nova categoria · ${CATEGORY_TYPES[v.type]}`}</h2>
     <label class="field"><span>Nome</span><input name="name" maxlength="30" value="${esc(v.name || '')}" autofocus></label>
     ${isEdit ? `<label class="switch-row"><span>Arquivar <small class="muted">(some da escolha de categoria; o histórico continua)</small></span><input type="checkbox" role="switch" name="archived" ${v.archived ? 'checked' : ''}></label>` : ''}
     <fieldset class="field"><legend>Ícone</legend><div class="icon-grid">${PICKABLE_ICONS.map((i) => `<label><input type="radio" name="icon" value="${i}" ${i === v.icon ? 'checked' : ''}><span>${icon(i, 18)}</span></label>`).join('')}</div></fieldset>

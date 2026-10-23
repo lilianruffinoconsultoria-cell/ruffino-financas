@@ -34,13 +34,28 @@ const DEFAULT_CATEGORIES = [
   ['Outros', 'income', 'ellipsis', '#7F8C9A'],
 ];
 
+/** Tipos de categoria que movimentam o saldo, mas não contam como receita nem despesa. */
+export const NEUTRAL_TYPES = { transfer: 'Transferências', refund: 'Reembolsos' };
+export const CATEGORY_TYPES = { expense: 'Despesas', income: 'Receitas', ...NEUTRAL_TYPES };
+
+/** IDs fixos: cada aparelho cria as mesmas categorias e a sincronização não as duplica. */
+function neutralDefaults() {
+  return [
+    ['neutro-transf-contas', 'Transferência entre contas', 'transfer', 'arrow-left-right', '#8FA3BF'],
+    ['neutro-aplicacao', 'Aplicação e resgate', 'transfer', 'piggy-bank', '#3E8E7E'],
+    ['neutro-emprestimo', 'Empréstimo a terceiros', 'transfer', 'hand-coins', '#7F8C9A'],
+    ['neutro-reemb-despesas', 'Reembolso de despesas', 'refund', 'rotate-ccw', '#5FAF6E'],
+    ['neutro-reemb-empresa', 'Reembolso da empresa', 'refund', 'briefcase', '#C5A059'],
+  ].map(([id, name, type, icon, color]) => ({ id, name, type, icon, color }));
+}
+
 function blank() {
   return {
-    version: 2,
+    version: 3,
     settings: { theme: 'dark', hide: false, name: '', pinHash: null, onboarded: false, autoPay: false, travelTag: '', smartAlert: true },
     accounts: [],
     cards: [],
-    categories: DEFAULT_CATEGORIES.map(([name, type, icon, color]) => ({ id: uid(), name, type, icon, color })),
+    categories: [...DEFAULT_CATEGORIES.map(([name, type, icon, color]) => ({ id: uid(), name, type, icon, color })), ...neutralDefaults()],
     transactions: [],
     budgetMonths: {},
     goals: [],
@@ -57,7 +72,9 @@ function migrate(data) {
   if (s.budgets && Object.keys(s.budgets).length && !Object.keys(s.budgetMonths).length)
     s.budgetMonths[thisMonth()] = { cats: { ...s.budgets }, alert: 80, total: 0 };
   delete s.budgets;
-  s.version = 2;
+  // v3: categorias de transferência e reembolso para quem já usava o app
+  if ((s.version || 1) < 3) for (const c of neutralDefaults()) if (!s.categories.some((x) => x.id === c.id)) s.categories.push(c);
+  s.version = 3;
   return s;
 }
 
@@ -112,8 +129,24 @@ export const categoryLabel = (id) => {
   const c = category(id);
   return c.parentId ? `${category(c.parentId).name} › ${c.name}` : c.name;
 };
-/** Transações ignoradas continuam no saldo, mas ficam fora de relatórios e planejamento. */
-export const counted = (t) => !t.ignored;
+/** Lançamento com categoria de transferência ou reembolso: mexe no saldo, mas não é receita nem despesa. */
+export const isNeutral = (t) => !!t.categoryId && !!NEUTRAL_TYPES[category(t.categoryId).type];
+/** Ignoradas e neutras continuam no saldo, mas ficam fora de receitas, despesas, relatórios e planejamento. */
+export const counted = (t) => !t.ignored && !isNeutral(t);
+
+/** Totais do mês das movimentações neutras, por categoria principal, com entradas e saídas. */
+export function neutralSummary(ym, scope) {
+  const map = new Map();
+  for (const t of S.transactions) {
+    if (monthOf(t.date) !== ym || !inScope(t, scope) || !isNeutral(t) || (t.type !== 'income' && t.type !== 'expense')) continue;
+    const id = rootId(t.categoryId);
+    const row = map.get(id) || { cat: category(id), in: 0, out: 0 };
+    if (t.type === 'income') row.in = round2(row.in + t.amount);
+    else row.out = round2(row.out + t.amount);
+    map.set(id, row);
+  }
+  return [...map.values()].sort((a, b) => b.in + b.out - (a.in + a.out));
+}
 /**
  * Parcelas anteriores ao controle no app (compra já em andamento quando foi cadastrada):
  * ficam só no histórico da compra, fora de saldos, faturas, limite e relatórios.

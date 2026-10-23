@@ -1,6 +1,6 @@
 // Formulário de lançamento: despesa, receita, transferência e despesa no cartão.
 import {
-  S, save, byId, category, categoriesOf, subcategoriesOf, addTransaction, updateTransaction, deleteTransaction, descriptionsIndex, allTags,
+  S, save, byId, category, categoriesOf, NEUTRAL_TYPES, subcategoriesOf, addTransaction, updateTransaction, deleteTransaction, descriptionsIndex, allTags,
   invoiceFor, card, SCOPES, averageForDescription, rootId, knownPeople,
 } from './store.js';
 import { esc, icon, today, isoDate, parseMoney, moneyPlain, monthLabel, money, uid, addMonths } from './util.js';
@@ -26,13 +26,14 @@ const activeCards = () => S.cards.filter((c) => !c.archived);
 const accountOptions = (selected) =>
   activeAccounts().map((a) => `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${esc(a.name)}${S.accounts.some((x) => x.scope === 'pj') ? ` · ${SCOPES[a.scope || 'pf']}` : ''}</option>`).join('');
 
+const catOption = (c, selectedRoot) => `<label class="cat-opt" style="--c:${c.color}"><input type="radio" name="categoryId" value="${c.id}" ${c.id === selectedRoot ? 'checked' : ''}>
+      <span class="cat-badge sm">${icon(c.icon, 16)}</span><span>${esc(c.name)}</span></label>`;
+
+/** Categorias do tipo do lançamento e, separadas, as que não contam como receita/despesa. */
 function categoryGrid(type, selectedRoot) {
-  return categoriesOf(type)
-    .map(
-      (c) => `<label class="cat-opt" style="--c:${c.color}"><input type="radio" name="categoryId" value="${c.id}" ${c.id === selectedRoot ? 'checked' : ''}>
-      <span class="cat-badge sm">${icon(c.icon, 16)}</span><span>${esc(c.name)}</span></label>`,
-    )
-    .join('');
+  const neutral = Object.keys(NEUTRAL_TYPES).flatMap((t) => categoriesOf(t));
+  return `${categoriesOf(type).map((c) => catOption(c, selectedRoot)).join('')}
+    ${neutral.length ? `<p class="cat-sep">${icon('arrow-left-right', 13)} Não computa em receitas e despesas</p>${neutral.map((c) => catOption(c, selectedRoot)).join('')}` : ''}`;
 }
 const subOptions = (rootCat, selected) => {
   const subs = rootCat ? subcategoriesOf(rootCat) : [];

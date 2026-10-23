@@ -1,5 +1,5 @@
 // Relatórios: receitas x despesas, categorias, evolução do saldo e DRE simplificado do mês.
-import { S, monthSummary, byCategory, projectedBalanceAt, monthTx, categoryLabel, account, card, SCOPES } from '../store.js';
+import { S, monthSummary, byCategory, projectedBalanceAt, monthTx, categoryLabel, account, card, SCOPES, neutralSummary, CATEGORY_TYPES } from '../store.js';
 import { esc, icon, addMonths, monthEnd, monthLabel, shortDate, moneyPlain, saveFile, money } from '../util.js';
 import { UI, $m, monthSwitcher, scopeChips, donut, barsChart, lineChart, empty, pct, on, rerender, toast } from '../ui.js';
 
@@ -20,6 +20,7 @@ export function renderReports() {
   const prev = new Map(byCategory(addMonths(ym, -1), sc, UI.reportTab).map((c) => [c.cat.id, c.total]));
   const d = dre(ym, sc);
   const balance = months.map((m) => ({ label: monthLabel(m, { short: true, year: false }), v: projectedBalanceAt(sc, monthEnd(m)) }));
+  const neutral = neutralSummary(ym, sc);
 
   return `<section>
     <header class="page-head"><h1>Relatórios</h1><div class="head-right">${monthSwitcher()}</div></header>
@@ -58,6 +59,13 @@ export function renderReports() {
           }).join('')}</ul>`
           : empty('chart-pie', 'Sem dados', `Nenhuma ${UI.reportTab === 'expense' ? 'despesa' : 'receita'} em ${monthLabel(ym)}.`)}
       </article>
+
+      ${neutral.length ? `<article class="card">
+        <header class="card-head"><h2>Transferências e reembolsos</h2><span class="muted small">fora do resultado</span></header>
+        <ul class="list compact">${neutral.map((n) => `<li class="row"><i class="dot-c" style="background:${n.cat.color}"></i><span class="grow">${esc(n.cat.name)}<small>${CATEGORY_TYPES[n.cat.type]}</small></span>
+          ${n.in ? `<span class="num pos">+ ${$m(n.in)}</span>` : ''}${n.out ? `<span class="num neg">− ${$m(n.out)}</span>` : ''}</li>`).join('')}</ul>
+        <p class="hint">Estes valores mexem no saldo das contas, mas não entram nas receitas, despesas nem no DRE.</p>
+      </article>` : ''}
 
       <article class="card">
         <header class="card-head"><h2>Evolução do saldo</h2><span class="muted small">projetado ao fim de cada mês</span></header>
