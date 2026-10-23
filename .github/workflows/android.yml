@@ -25,7 +25,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+      # O runner ubuntu-latest já traz o Android SDK (ANDROID_HOME); só aceitamos as licenças.
+      - run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - run: npm ci
       - run: npm run build
