@@ -23,11 +23,11 @@ function wireSeg(sheet) {
 
 // ---------- contas ----------
 const accountRow = (a) => `
-  <li><button class="row linklike" data-action="account-form" data-id="${a.id}">
+  <li class="row"><button class="row linklike grow-row" data-action="open-statement" data-id="${a.id}" aria-label="Ver extrato de ${esc(a.name)}">
     <span class="cat-badge" style="--c:${a.color}">${icon(ACCOUNT_ICONS[a.type] || 'wallet', 18)}</span>
-    <span class="grow"><b>${esc(a.name)}</b><small>${ACCOUNT_TYPES[a.type] || 'Conta'} · ${SCOPES[a.scope || 'pf']}${a.archived ? ' · arquivada' : ''}</small></span>
+    <span class="grow"><b>${esc(a.name)}</b><small>${ACCOUNT_TYPES[a.type] || 'Conta'} · ${SCOPES[a.scope || 'pf']}${a.archived ? ' · arquivada' : ''} · ver extrato</small></span>
     <span class="num-col"><span class="num ${accountBalance(a.id) < 0 ? 'neg' : ''}">${$m(accountBalance(a.id))}</span><small>prev. ${$m(accountBalance(a.id, monthEnd(thisMonth())))}</small></span>
-  </button></li>`;
+  </button><button class="icon-btn" data-action="account-form" data-id="${a.id}" aria-label="Editar ${esc(a.name)}">${icon('pencil', 16)}</button></li>`;
 
 export function renderAccounts() {
   const list = accountsIn(UI.scope);
@@ -151,8 +151,7 @@ export function renderCards() {
     ${scopeChips()}
     ${best ? `<div class="best-card">${icon('star', 18)}<span>O melhor cartão para comprar hoje é o <b>${esc(best.card.name)}</b>: a compra só vence em <b>${best.days} dias</b> (${shortDate(invoiceDueDate(best.card, currentInvoice(best.card)))}).</span></div>` : ''}
     ${list.length ? `<div class="grid">${list.map(cardTile).join('')}</div>` : `<article class="card">${empty('credit-card', 'Nenhum cartão', 'Cadastre seus cartões para acompanhar faturas e limite disponível.')}</article>`}
-    <p class="hint">${icon('info', 14)} As compras parceladas de cada cartão ficam dentro dele, junto da fatura.</p>
-    <a class="menu-item" href="#/parcelamentos"><span class="menu-ic">${icon('handshake', 22)}</span><span><b>Parcelamentos com pessoas e lojas</b><small>Fora do cartão: carnês, crediários, Pix parcelado, a pagar e a receber</small></span>${icon('chevron-right', 18, 'muted')}</a>
+    <p class="hint">${icon('info', 14)} Toque num cartão para ver a fatura e as compras parceladas dele.</p>
     ${archived.length ? `<details class="card"><summary class="card-head"><h2>Arquivados (${archived.length})</h2></summary><div class="grid">${archived.map(cardTile).join('')}</div></details>` : ''}
   </section>`;
 }
@@ -292,6 +291,16 @@ const invoiceOf = (c) => UI.invoice[c.id] || currentInvoice(c);
 
 on({
   'account-form': (el) => accountForm(el.dataset.id ? account(el.dataset.id) : null),
+  'open-statement': (el) => {
+    UI.txAccount = el.dataset.id;
+    UI.txQuery = '';
+    try {
+      localStorage.setItem('ruffino-financas:conta-extrato', el.dataset.id);
+    } catch {
+      /* preferência só deste aparelho */
+    }
+    if (location.hash !== '#/transacoes') go('#/transacoes');
+  },
   'card-form': (el) => cardForm(el.dataset.id ? card(el.dataset.id) : null),
   'invoice-month': (el) => {
     const c = card(el.dataset.id);

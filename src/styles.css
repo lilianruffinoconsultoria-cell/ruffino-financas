@@ -431,3 +431,14 @@ label.chip{cursor:pointer}
 /* ---------- categorias neutras (transferências e reembolsos) ---------- */
 .cat-sep{grid-column:1/-1;display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--meta)}
 .cat-sep .ic{display:inline-block}
+
+/* ---------- extrato por conta ---------- */
+.acc-head{display:flex;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:var(--r);background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--c)}
+.acc-head small{display:block;color:var(--meta);font-size:12px}
+.acc-head b{font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums}
+.acc-head .right{text-align:right}
+.acc-head .right b{font-size:15px;color:var(--muted)}
+.acc-chips .chip .ic{display:inline-block}
+.day-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.day-bal{font-size:11.5px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--muted);font-variant-numeric:tabular-nums}
+li.row>.grow-row{flex:1;min-width:0;padding:0}

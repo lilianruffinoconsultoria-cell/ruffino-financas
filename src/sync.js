@@ -1,5 +1,5 @@
 // Sincronização opcional com o Supabase (nuvem): mesmos dados no celular, no computador e no APK.
-// Os dados do app ficam numa linha por usuário (tabela app_state, ver supabase/schema.sql), protegida por RLS.
+// Os dados do app ficam numa linha por usuário (tabela ruffino_financas_estado, ver supabase/schema.sql), protegida por RLS.
 // Cada envio sobe o número da versão (rev): se outro aparelho salvou antes, o envio não sobrescreve
 // e o app pergunta qual versão manter. Comprovantes (fotos/PDF) continuam só no aparelho.
 import { S, onSave, replaceState } from './store.js';
@@ -8,7 +8,7 @@ const CFG_KEY = 'ruffino-financas:cloud';
 const ENV = import.meta.env || {};
 const ENV_URL = ENV.VITE_SUPABASE_URL || '';
 const ENV_KEY = ENV.VITE_SUPABASE_ANON_KEY || '';
-const TABLE = 'app_state';
+const TABLE = 'ruffino_financas_estado';
 
 function loadCfg() {
   try {
@@ -70,8 +70,9 @@ function friendly(e) {
   if (/Invalid login credentials/i.test(m)) return 'E-mail ou senha incorretos.';
   if (/Email not confirmed/i.test(m)) return 'Confirme o e-mail pelo link que chegou na sua caixa de entrada e tente de novo.';
   if (/already registered|already been registered/i.test(m)) return 'Este e-mail já tem conta. Use “Entrar”.';
+  if (/signups? not allowed|signup.*disabled/i.test(m)) return 'Novos cadastros estão desativados neste projeto. Entre com o e-mail e a senha que você já usa no CRM.';
   if (/Password should be/i.test(m)) return 'A senha precisa ter pelo menos 6 caracteres.';
-  if (/app_state|42P01|PGRST205|schema cache/i.test(m)) return 'A tabela app_state não existe no Supabase. Rode o arquivo supabase/schema.sql no SQL Editor.';
+  if (/ruffino_financas_estado|42P01|PGRST205|schema cache/i.test(m)) return 'A tabela ruffino_financas_estado não existe no Supabase. Rode o arquivo supabase/schema.sql no SQL Editor.';
   if (/Failed to fetch|NetworkError|network/i.test(m)) return 'Sem conexão com o Supabase. Os dados ficam salvos no aparelho e sobem quando a internet voltar.';
   if (/Invalid API key|apikey/i.test(m)) return 'Chave do Supabase inválida. Confira a URL e a chave “anon/public”.';
   return m || 'Erro desconhecido.';

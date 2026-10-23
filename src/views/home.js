@@ -29,7 +29,8 @@ export function renderHome() {
   const planned = plan.total || budgetIds.reduce((a, id) => a + plan.cats[id], 0);
   const plannedSpent = plan.total ? sum.expense : budgetIds.reduce((a, id) => a + spentInCategory(id, ym, sc), 0);
   const best = bestCard(sc);
-  const inst = installmentGroups(sc).filter((g) => !g.done && g.dir === 'pay').sort((a, b) => b.remaining - a.remaining);
+  // só os parcelamentos fora do cartão (os do cartão ficam em cada cartão)
+  const inst = installmentGroups(sc, { where: 'outside' }).filter((g) => !g.done && g.dir === 'pay').sort((a, b) => b.remaining - a.remaining);
   const instLeft = inst.reduce((a, g) => a + g.remaining, 0);
   const tip = TIPS[(new Date().getDate() + new Date().getMonth()) % TIPS.length];
 
@@ -63,7 +64,7 @@ export function renderHome() {
       <article class="card">
         <header class="card-head"><h2>Contas</h2><a href="#/contas" class="link">Gerenciar</a></header>
         ${accounts.length ? `<ul class="list">${accounts.map((a) => `
-          <li><a class="row" href="#/contas">
+          <li><a class="row" href="#/transacoes" data-action="open-statement" data-id="${a.id}">
             <span class="cat-badge" style="--c:${a.color}">${icon(ACCOUNT_ICONS[a.type] || 'wallet', 18)}</span>
             <span class="grow"><b>${esc(a.name)}</b><small>${a.scope === 'pj' ? 'Empresa' : 'Pessoal'}</small></span>
             <span class="num">${$m(accountBalance(a.id))}</span></a></li>`).join('')}</ul>`
@@ -116,10 +117,10 @@ export function renderHome() {
       </article>
 
       ${inst.length ? `<article class="card">
-        <header class="card-head"><h2>Compras parceladas</h2><a href="#/parcelamentos" class="link">Parcelamentos</a></header>
-        <div class="plan-sum"><div><small>Falta pagar (${inst.length} compras, cartão e fora dele)</small><b>${$m(instLeft)}</b></div></div>
+        <header class="card-head"><h2>Parcelamentos</h2><a href="#/parcelamentos" class="link">Ver todos</a></header>
+        <div class="plan-sum"><div><small>Falta pagar (${inst.length} parcelamento(s) fora do cartão)</small><b>${$m(instLeft)}</b></div></div>
         <ul class="list compact">${inst.slice(0, 3).map((g) => `<li><button class="row col linklike" data-action="inst-open" data-id="${g.groupId}"><div class="row-in">${catBadge(category(g.categoryId), 30)}
-          <span class="grow"><b>${esc(g.desc)}</b><small>${g.paidCount}/${g.n} pagas · falta ${$m(g.remaining)} · ${g.cardId ? 'cartão' : esc(g.person || 'fora do cartão')}</small></span></div>${progress(g.paidValue, g.total, { warn: 2 })}</button></li>`).join('')}</ul>
+          <span class="grow"><b>${esc(g.desc)}</b><small>${g.paidCount}/${g.n} pagas · falta ${$m(g.remaining)}${g.person ? ` · ${esc(g.person)}` : ''}</small></span></div>${progress(g.paidValue, g.total, { warn: 2 })}</button></li>`).join('')}</ul>
       </article>` : ''}
 
       <article class="card">

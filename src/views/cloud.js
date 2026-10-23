@@ -37,7 +37,7 @@ export function openCloudConfig(after) {
   openSheet(`<form class="tx-form"><h2 class="sheet-title">${icon('cloud', 20)} Projeto Supabase</h2>
     <p class="muted small">No painel do Supabase: <b>Project Settings → API</b>. Copie a <b>Project URL</b> e a chave <b>anon public</b> (nunca use a chave <i>service_role</i> no app).</p>
     <label class="field"><span>Project URL</span><input name="url" inputmode="url" autocomplete="off" placeholder="https://xxxx.supabase.co" value="${esc(i.url)}"></label>
-    <label class="field"><span>Chave anon public</span><input name="key" autocomplete="off" placeholder="eyJhbGciOi…"></label>
+    <label class="field"><span>Chave pública (publishable ou anon)</span><input name="key" autocomplete="off" placeholder="sb_publishable_… ou eyJhbGciOi…"></label>
     <p class="form-error" role="alert" hidden></p>
     <div class="form-actions"><button class="btn primary">${icon('check', 18)} Salvar</button></div></form>`, {
     onMount(sheet) {

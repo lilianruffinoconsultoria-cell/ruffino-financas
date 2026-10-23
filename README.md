@@ -26,7 +26,7 @@ Os dados ficam guardados no aparelho (armazenamento local do navegador/app) e, o
 
 ## Sincronização na nuvem (Supabase) — usar em vários aparelhos
 
-O app continua funcionando offline; a nuvem é uma cópia sincronizada. Cada usuário tem uma linha na tabela `app_state` com os dados do app em JSON, protegida por RLS (cada conta só enxerga a própria linha). Cada envio sobe a versão (`rev`): se outro aparelho salvou antes, nada é sobrescrito e o app pergunta qual versão manter.
+O app continua funcionando offline; a nuvem é uma cópia sincronizada. Cada usuário tem uma linha na tabela `ruffino_financas_estado` com os dados do app em JSON, protegida por RLS (cada conta só enxerga a própria linha). Cada envio sobe a versão (`rev`): se outro aparelho salvou antes, nada é sobrescrito e o app pergunta qual versão manter.
 
 1. Crie um projeto grátis em [supabase.com](https://supabase.com).
 2. No painel: **SQL Editor → New query**, cole o conteúdo de `supabase/schema.sql` e clique em **Run**.

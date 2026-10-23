@@ -205,6 +205,24 @@ export function accountBalance(accId, pendingUpTo = null) {
 }
 export const totalBalance = (scope, pendingUpTo = null) => sum(accountsIn(scope), (a) => accountBalance(a.id, pendingUpTo));
 
+/** Efeito de um lançamento no saldo de uma conta (+ entra, − sai, 0 não é desta conta). */
+export function accountEffect(t, accId) {
+  if (t.prior) return 0;
+  if (t.type === 'income' && t.accountId === accId) return t.amount;
+  if (((t.type === 'expense' && !t.cardId) || t.type === 'payment') && t.accountId === accId) return -t.amount;
+  if (t.type === 'transfer') return (t.toAccountId === accId ? t.amount : 0) - (t.accountId === accId ? t.amount : 0);
+  return 0;
+}
+/** Extrato de uma conta: só os lançamentos que mexem nela (compras no cartão ficam no cartão). */
+export const accountTx = (accId) => S.transactions.filter((t) => accountEffect(t, accId) !== 0);
+/** Saldo da conta ao fim de um dia, contando tudo o que está lançado até lá (pago ou pendente). */
+export function accountBalanceAt(accId, iso) {
+  const a = account(accId);
+  let b = a ? Number(a.initial) || 0 : 0;
+  for (const t of S.transactions) if (t.date <= iso) b += accountEffect(t, accId);
+  return round2(b);
+}
+
 /** Saldo projetado (tudo lançado até a data, pago ou não), usado no gráfico de evolução. */
 export function projectedBalanceAt(scope, iso) {
   const accs = accountsIn(scope);

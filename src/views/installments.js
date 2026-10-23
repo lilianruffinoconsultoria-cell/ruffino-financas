@@ -50,8 +50,6 @@ export function renderInstallments() {
   const dueIn = (ym) => active.reduce((a, g) => a + g.list.filter((t) => !installmentPaid(t) && monthOf(installmentDue(t)) === ym).reduce((x, t) => x + t.amount, 0), 0);
   const late = active.reduce((a, g) => a + g.late, 0);
   const people = installmentPeople(UI.scope).filter((p) => p[F.dir] > 0 || p.groups.some((g) => g.dir === F.dir && !g.done));
-  const cardGroups = installmentGroups(UI.scope, { where: 'card' }).filter((g) => !g.done);
-  const cardLeft = cardGroups.reduce((a, g) => a + g.remaining, 0);
 
   return `<section>
     ${pageHead('Parcelamentos', { back: '#/mais', right: `<button class="btn primary sm" data-action="inst-new">${icon('plus', 16)} Novo</button>` })}
@@ -79,7 +77,6 @@ export function renderInstallments() {
       : empty('handshake', F.status === 'active' ? `Nenhum parcelamento ${F.dir === 'pay' ? 'a pagar' : 'a receber'}` : 'Nenhum parcelamento quitado ainda',
         F.dir === 'pay' ? 'Registre compras parceladas com pessoas, carnês, crediários, boletos ou Pix parcelado.' : 'Registre vendas ou empréstimos que alguém está te pagando em parcelas.',
         '<button class="btn primary sm" data-action="inst-new">Novo parcelamento</button>')}</article>
-    <a class="menu-item" href="#/cartoes"><span class="menu-ic">${icon('credit-card', 22)}</span><span><b>Parcelas no cartão</b><small>${cardGroups.length ? `${cardGroups.length} compra(s) · falta ${$m(cardLeft)} · veja em cada cartão` : 'Ficam dentro de cada cartão, junto da fatura'}</small></span>${icon('chevron-right', 18, 'muted')}</a>
   </section>`;
 }
 
