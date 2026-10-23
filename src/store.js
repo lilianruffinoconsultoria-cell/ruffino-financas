@@ -276,8 +276,29 @@ export const currentInvoice = (c) => invoiceFor(c, today());
 export function cardUsed(cardId) {
   const spent = sum(S.transactions.filter((t) => isCardItem(t) && t.cardId === cardId), invoiceEffect);
   const paid = sum(S.transactions.filter((t) => t.type === 'payment' && t.cardId === cardId), (t) => t.amount);
-  return Math.max(0, round2(spent - paid));
+  return Math.max(0, round2(spent - paid + importedPending(cardId)));
 }
+
+/**
+ * Compras parceladas trazidas pela importação da fatura: só existe a parcela de cada fatura importada.
+ * As seguintes ainda "a importar" ocupam o limite e entram no quanto falta, sem aparecer em nenhum mês.
+ */
+function importedSeries(cardId = null) {
+  const map = new Map();
+  for (const t of S.transactions) {
+    if (!t.importedSeries || !t.groupId || !t.installment || (cardId && t.cardId !== cardId)) continue;
+    const g = map.get(t.groupId) || { maxN: 0, total: t.installment.total, per: t.amount };
+    if (t.installment.n >= g.maxN) Object.assign(g, { maxN: t.installment.n, per: t.originalAmount || t.amount });
+    map.set(t.groupId, g);
+  }
+  return map;
+}
+/** Quantas parcelas e quanto ainda falta importar numa compra (0 se não veio da importação). */
+export function importedMissing(groupId) {
+  const g = importedSeries().get(groupId);
+  return g ? { count: Math.max(0, g.total - g.maxN), value: round2(Math.max(0, g.total - g.maxN) * g.per) } : { count: 0, value: 0 };
+}
+export const importedPending = (cardId) => sum([...importedSeries(cardId).values()], (g) => Math.max(0, g.total - g.maxN) * g.per);
 const daysBetween = (a, b) => Math.round((new Date(`${b}T12:00`) - new Date(`${a}T12:00`)) / 864e5);
 export const daysToDue = (c, ym) => daysBetween(today(), invoiceDueDate(c, ym));
 /** Melhor cartão para comprar hoje: o que dá mais dias até o vencimento da fatura da compra. */
@@ -311,7 +332,7 @@ export function invoiceBreakdown(cardId, ym) {
 }
 /** Parcelas que ainda vão entrar em faturas depois da informada (já ocupam o limite, mas não esta fatura). */
 export const futureInstallments = (cardId, ym) =>
-  sum(S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.installment && !t.prior && t.invoice > ym), (t) => t.amount);
+  round2(sum(S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.installment && !t.prior && t.invoice > ym), (t) => t.amount) + importedPending(cardId));
 
 // ---------- resumos do mês ----------
 export const monthTx = (ym, scope) => S.transactions.filter((t) => !t.prior && monthOf(t.date) === ym && inScope(t, scope));
@@ -536,7 +557,8 @@ export function installmentGroups(scope = 'all', { where = 'all', cardId = null 
     const open = list.filter((t) => !installmentPaid(t)).sort((a, b) => installmentDue(a).localeCompare(installmentDue(b)));
     const first = list[0];
     const last = list[list.length - 1];
-    const total = sum(list, (t) => t.amount);
+    const missing = importedMissing(groupId); // parcelas futuras ainda não importadas
+    const total = round2(sum(list, (t) => t.amount) + missing.value);
     const paidValue = sum(paid, (t) => t.amount);
     const person = list.map((t) => t.person).find(Boolean) || '';
     return {
@@ -561,7 +583,10 @@ export function installmentGroups(scope = 'all', { where = 'all', cardId = null 
       end: installmentDue(last),
       discount: sum(list, (t) => (t.originalAmount ? t.originalAmount - t.amount : 0)),
       late: open.filter((t) => installmentDue(t) < today()).length,
-      done: !open.length,
+      missing: missing.count,
+      missingValue: missing.value,
+      imported: list.some((t) => t.importedSeries),
+      done: !open.length && !missing.count,
     };
   });
 }

@@ -214,12 +214,13 @@ function cardForm(c) {
 function cardInstRow(g, ym) {
   const here = installmentIn(g, ym);
   const after = g.list.filter((t) => !t.prior && t.invoice > ym);
-  const left = after.reduce((a, t) => a + t.amount, 0);
+  const left = after.reduce((a, t) => a + t.amount, 0) + (g.missingValue || 0);
   const nextInv = after[0]?.invoice;
+  const afterCount = after.length + (g.missing || 0);
   return `<li><button class="row col linklike inst" data-action="inst-open" data-id="${g.groupId}">
     <div class="row-in">${catBadge(category(g.categoryId), 36)}
-      <span class="grow"><b>${esc(g.desc)}</b><small>${here ? `Parcela <b>${here.installment.n}/${g.n}</b> nesta fatura · ${$m(here.amount)}` : nextInv ? `Sem parcela nesta fatura · próxima em ${monthLabel(nextInv, { short: true })}` : 'Sem parcelas a partir desta fatura'}</small></span>
-      <span class="num-col"><span class="num">${$m(left)}</span><small>${after.length ? `${after.length} parcela(s) depois` : g.done ? 'quitada' : 'última'}</small></span></div>
+      <span class="grow"><b>${esc(g.desc)}</b><small>${here ? `Parcela <b>${here.installment.n}/${g.n}</b> nesta fatura · ${$m(here.amount)}` : nextInv ? `Sem parcela nesta fatura · próxima em ${monthLabel(nextInv, { short: true })}` : g.missing ? 'Próximas parcelas virão na importação das faturas seguintes' : 'Sem parcelas a partir desta fatura'}${g.imported ? ' · importada' : ''}</small></span>
+      <span class="num-col"><span class="num">${$m(left)}</span><small>${afterCount ? `${afterCount} parcela(s) depois` : g.done ? 'quitada' : 'última'}</small></span></div>
     ${progress(g.paidValue, g.total, { warn: 2 })}
   </button></li>`;
 }

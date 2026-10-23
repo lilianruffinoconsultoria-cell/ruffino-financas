@@ -54,7 +54,7 @@ export function parseCsv(text) {
     return hasHeader && i >= 0 ? i : fallback;
   };
   const iDate = find(/data|date/, 0);
-  const iDesc = find(/descri|hist[oó]rico|lan[cç]amento|memo|estabelec/, 1);
+  const iDesc = find(/descri|hist[oó]rico|lan[cç]amento|memo|estabelec|title|t[ií]tulo/, 1);
   const iVal = find(/valor|amount|quantia/, 2);
   const iType = hasHeader ? head.findIndex((h) => /^tipo|type|natureza/.test(h)) : -1;
   const iCat = hasHeader ? head.findIndex((h) => /categ/.test(h)) : -1;
@@ -69,6 +69,32 @@ export function parseCsv(text) {
     })
     .filter(Boolean);
 }
+
+/**
+ * Parcela informada na descrição da fatura: "LOJA PARC 03/10", "LOJA - Parcela 3 de 10",
+ * "LOJA 03/10" (no final). Devolve { n, total, base } com a descrição sem a marca da parcela.
+ */
+export function parseInstallment(desc) {
+  const s = String(desc || '');
+  const patterns = [
+    /\bparc(?:ela)?\.?\s*(\d{1,2})\s*(?:\/|de)\s*(\d{1,2})\b/i,
+    /\b(\d{1,2})\s+de\s+(\d{1,2})\s*$/i,
+    /\(?\b(\d{1,2})\s*\/\s*(\d{1,2})\)?\s*$/,
+  ];
+  for (const re of patterns) {
+    const m = s.match(re);
+    if (!m) continue;
+    const n = Number(m[1]);
+    const total = Number(m[2]);
+    if (total < 2 || total > 72 || n < 1 || n > total) continue;
+    const base = s.replace(m[0], ' ').replace(/[\s\-–·|,]+$/, '').replace(/\s{2,}/g, ' ').trim();
+    return { n, total, base: base || s };
+  }
+  return null;
+}
+
+/** Linha de pagamento da fatura anterior (não é compra nem estorno). */
+export const isInvoicePayment = (desc) => /pagamento (recebido|efetuado|da fatura)|pgto|pagto|^pagamento$/i.test(String(desc || ''));
 
 /** OFX (SGML ou XML): cada <STMTTRN> vira uma linha; FITID evita duplicar na reimportação. */
 export function parseOfx(text) {

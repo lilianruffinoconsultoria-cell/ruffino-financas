@@ -16,6 +16,7 @@ function txMeta(t) {
   const parts = [esc(categoryLabel(t.categoryId)), t.cardId ? esc(card(t.cardId)?.name || 'Cartão') : esc(account(t.accountId)?.name || '')];
   if (t.person) parts.push(`${t.type === 'income' ? 'de' : 'para'} ${esc(t.person)}`);
   if (t.installment) parts.push(`parcela ${t.installment.n}/${t.installment.total}`);
+  if (t.purchaseDate) parts.push(`compra em ${shortDate(t.purchaseDate)}`);
   if (t.fixed) parts.push('fixa');
   return parts.join(' · ');
 }
