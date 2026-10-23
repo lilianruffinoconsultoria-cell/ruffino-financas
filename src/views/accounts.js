@@ -218,8 +218,8 @@ function cardInstRow(g, ym) {
   const afterCount = after.length + (g.missing || 0);
   return `<li><button class="row col linklike inst" data-action="inst-open" data-id="${g.groupId}">
     <div class="row-in">${catBadge(category(g.categoryId), 36)}
-      <span class="grow"><b>${esc(g.desc)}</b><small>${here ? `Parcela <b>${here.installment.n}/${g.n}</b> nesta fatura · ${$m(here.amount)}` : nextInv ? `Sem parcela nesta fatura · próxima em ${monthLabel(nextInv, { short: true })}` : g.missing ? 'Próximas parcelas virão na importação das faturas seguintes' : 'Sem parcelas a partir desta fatura'}${g.imported ? ' · importada' : ''}</small></span>
-      <span class="num-col"><span class="num">${$m(left)}</span><small>${afterCount ? `${afterCount} parcela(s) depois` : g.done ? 'quitada' : 'última'}</small></span></div>
+      <span class="grow"><b>${esc(g.desc)}</b><small>Parcela <b>${here.installment.n}/${g.n}</b>${afterCount ? ` · faltam ${afterCount} (${$m(left)})` : ' · última parcela'}${nextInv ? ` · próxima em ${monthLabel(nextInv, { short: true })}` : ''}</small></span>
+      <span class="num">${$m(here.amount)}</span></div>
     ${progress(g.paidValue, g.total, { warn: 2 })}
   </button></li>`;
 }
@@ -238,9 +238,10 @@ export function renderCardDetail(id) {
   const d = daysToDue(c, ym);
   const bd = invoiceBreakdown(id, ym);
   const future = futureInstallments(id, ym);
+  // só as compras que têm parcela nesta fatura
   const groups = installmentGroups('all', { cardId: id })
-    .filter((g) => installmentIn(g, ym) || g.list.some((t) => !t.prior && t.invoice > ym))
-    .sort((a, b) => !!installmentIn(b, ym) - !!installmentIn(a, ym) || b.remaining - a.remaining);
+    .filter((g) => installmentIn(g, ym))
+    .sort((a, b) => b.remaining - a.remaining);
   const payments = S.transactions.filter((t) => t.type === 'payment' && t.cardId === id && t.invoice === ym);
   return `<section>
     ${pageHead(c.name, { back: '#/cartoes', right: `<button class="icon-btn" data-action="card-form" data-id="${c.id}" aria-label="Editar cartão">${icon('pencil')}</button>` })}
@@ -271,10 +272,10 @@ export function renderCardDetail(id) {
       <button class="chip" data-action="card-anticipate" data-id="${id}">${icon('calendar-clock', 14)} Antecipar parcelas</button>
     </div>
     <article class="card">
-      <header class="card-head"><h2>Compras parceladas</h2><span class="muted small">${groups.length} ativa(s)</span></header>
-      ${groups.length ? `<p class="hint">Nesta fatura entram só as parcelas do mês (<b>${$m(bd.installments)}</b>). Faltam <b>${$m(future)}</b> em faturas futuras: isso ocupa o limite, mas não soma nesta fatura.</p>
-        <ul class="list">${groups.map((g) => cardInstRow(g, ym)).join('')}</ul>`
-        : empty('layers', 'Nenhuma compra parcelada', 'Compras parceladas neste cartão aparecem aqui, com a parcela de cada fatura e quanto falta.', `<button class="btn primary sm" data-action="new-card-inst" data-id="${id}">Lançar compra parcelada</button>`)}
+      <header class="card-head"><h2>Parcelas desta fatura</h2><span class="muted small">${groups.length} parcela(s) · ${$m(bd.installments)}</span></header>
+      ${groups.length ? `<ul class="list">${groups.map((g) => cardInstRow(g, ym)).join('')}</ul>
+        ${future ? `<p class="hint">Depois desta fatura ainda faltam <b>${$m(future)}</b> em parcelas: isso ocupa o limite, mas não soma aqui.</p>` : ''}`
+        : empty('layers', `Nenhuma parcela na fatura de ${monthLabel(ym)}`, 'As parcelas aparecem apenas na fatura do mês em que são cobradas.', `<button class="btn primary sm" data-action="new-card-inst" data-id="${id}">Lançar compra parcelada</button>`)}
     </article>
     <article class="card">
       <header class="card-head"><h2>Lançamentos</h2><span class="muted small">${items.length} item(ns)</span></header>
