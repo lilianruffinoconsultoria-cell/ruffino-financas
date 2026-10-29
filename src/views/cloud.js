@@ -1,5 +1,5 @@
 // Tela e painéis da sincronização com o Supabase (configuração, login, status e conflito).
-import { cloudInfo, setCloudConfig, signIn, signUp, signOut, syncNow, setConflictHandler, onCloudChange } from '../sync.js';
+import { cloudInfo, setCloudConfig, signIn, signUp, signOut, syncNow, setConflictHandler, onCloudChange, updatePassword } from '../sync.js';
 import { esc, icon } from '../util.js';
 import { on, openSheet, closeSheet, toast, confirmSheet, rerender } from '../ui.js';
 
@@ -54,6 +54,38 @@ export function openCloudConfig(after) {
         toast('Projeto salvo.');
         if (after) after();
         else openLogin();
+      });
+    },
+  });
+}
+
+/** Senha nova, depois do link de "Esqueci minha senha". `onDone` roda depois de salvar. */
+export function openNewPassword({ onDone } = {}) {
+  openSheet(`<form class="tx-form"><h2 class="sheet-title">${icon('key-round', 20)} Criar senha nova</h2>
+    <p class="muted small">Conta: <b>${esc(cloudInfo().email || '')}</b></p>
+    <label class="field"><span>Senha nova</span><input name="password" type="password" autocomplete="new-password" minlength="6" required autofocus></label>
+    <label class="field"><span>Repita a senha</span><input name="again" type="password" autocomplete="new-password" minlength="6" required></label>
+    <p class="form-error" role="alert" hidden></p>
+    <div class="form-actions"><button class="btn primary">${icon('check', 18)} Salvar senha</button></div></form>`, {
+    onMount(sheet) {
+      const f = sheet.querySelector('form');
+      const err = f.querySelector('.form-error');
+      const fail = (msg) => ((err.textContent = msg), (err.hidden = false));
+      f.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        err.hidden = true;
+        if (f.password.value.length < 6) return fail('A senha precisa ter pelo menos 6 caracteres.');
+        if (f.password.value !== f.again.value) return fail('As duas senhas não são iguais.');
+        f.querySelector('button').disabled = true;
+        try {
+          await updatePassword(f.password.value);
+          closeSheet();
+          toast('Senha alterada. Use a senha nova nos outros aparelhos.');
+          onDone?.();
+        } catch (ex) {
+          fail(ex.message);
+          f.querySelector('button').disabled = false;
+        }
       });
     },
   });

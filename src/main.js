@@ -1,7 +1,7 @@
 // Ponto de entrada: estrutura da tela, rotas, eventos globais, boas-vindas e bloqueio por PIN.
 import './styles.css';
 import { S, ensureRecurring, applyAutoPay, seedDemo, startFromScratch } from './store.js';
-import { icon, addMonths, thisMonth, sha256, isNative } from './util.js';
+import { icon, esc, addMonths, thisMonth, sha256, isNative } from './util.js';
 import { UI, ACTIONS, on, setRerender, removeSheet, sheetOpen, closeSheet, toast } from './ui.js';
 import { applyTheme } from './theme.js';
 import { LOGO } from './brand.js';
@@ -17,8 +17,8 @@ import { renderCalendar } from './views/calendar.js';
 import { renderTags } from './views/tags.js';
 import { renderImport, handleImportInput } from './views/import.js';
 import { renderInstallments } from './views/installments.js';
-import { initCloud, onCloudChange } from './sync.js';
-import { openLogin } from './views/cloud.js';
+import { initCloud, onCloudChange, cloudConfigured, cloudInfo, signIn, signUp, resetPassword, syncNow, startRecovery } from './sync.js';
+import { openLogin, openNewPassword } from './views/cloud.js';
 
 const ROUTES = [
   [/^#?\/?$/, renderHome, 'home'],
@@ -145,7 +145,112 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('popstate', () => sheetOpen() && removeSheet());
 
 // ---------- telas de entrada ----------
-function showOnboarding() {
+// nome informado no cadastro que exigiu confirmação por e-mail (usado no primeiro login dessa conta)
+const PENDING_KEY = 'ruffino-financas:pending-name';
+function pendingName(email, set) {
+  try {
+    if (set) return localStorage.setItem(PENDING_KEY, JSON.stringify({ email: email.toLowerCase(), name: set }));
+    const p = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
+    return p && p.email === email.toLowerCase() ? p.name : '';
+  } catch {
+    return '';
+  }
+}
+
+/** Entra no app já com os dados em S (conta nova ou sem dados na nuvem) e sobe para a conta. */
+async function startAccount(name) {
+  startFromScratch(name);
+  location.hash = '#/';
+  start();
+  await syncNow();
+}
+
+/** Boas-vindas com cadastro/login. `tab`: 'login' | 'signup'. */
+function showOnboarding({ tab = 'login', email = '', notice = '' } = {}) {
+  if (!cloudConfigured()) return showOnboardingLocal();
+  const login = tab === 'login';
+  app.innerHTML = `<div class="onboard">
+    <div class="ob-logo">${LOGO}</div>
+    <h1>Ruffino <span>Finanças</span></h1>
+    <p class="lead">Controle de gastos, cartões, planejamento e metas, com o método da Lilian Ruffino Consultoria.</p>
+    <div class="seg two ob-tabs" role="tablist">
+      <button type="button" role="tab" class="seg-btn${login ? ' on' : ''}" data-tab-ob="login" aria-selected="${login}">Entrar</button>
+      <button type="button" role="tab" class="seg-btn${login ? '' : ' on'}" data-tab-ob="signup" aria-selected="${!login}">Criar conta</button>
+    </div>
+    <form class="ob-form" novalidate>
+      ${notice ? `<p class="ob-notice" role="status">${icon('mail', 16)}<span>${esc(notice)}</span></p>` : ''}
+      ${login ? '' : '<label class="field"><span>Como podemos te chamar?</span><input id="ob-name" name="name" maxlength="30" placeholder="Seu nome" autocomplete="given-name"></label>'}
+      <label class="field"><span>E-mail</span><input name="email" type="email" inputmode="email" autocomplete="email" placeholder="voce@email.com" value="${esc(email)}"></label>
+      <label class="field"><span>Senha</span><input name="password" type="password" autocomplete="${login ? 'current-password' : 'new-password'}" placeholder="${login ? 'Sua senha' : 'Mínimo de 6 caracteres'}"></label>
+      ${login ? '' : '<p class="small muted">Use pelo menos 6 caracteres. Seus dados ficam salvos neste e-mail.</p>'}
+      <p class="form-error" role="alert" hidden></p>
+      <button class="btn primary block" data-submit>${login ? 'Entrar' : 'Criar conta'}</button>
+      ${login ? '<button type="button" class="ob-link center" data-forgot>Esqueci minha senha</button>' : ''}
+    </form>
+  </div>`;
+
+  const form = app.querySelector('.ob-form');
+  const err = form.querySelector('.form-error');
+  const btn = form.querySelector('[data-submit]');
+  const showErr = (msg) => ((err.textContent = msg), (err.hidden = !msg));
+  const busy = (on, label) => {
+    form.querySelectorAll('button').forEach((b) => (b.disabled = on));
+    btn.textContent = on ? label : login ? 'Entrar' : 'Criar conta';
+  };
+
+  app.querySelectorAll('[data-tab-ob]').forEach((b) =>
+    b.addEventListener('click', () => b.dataset.tabOb !== tab && showOnboarding({ tab: b.dataset.tabOb, email: form.email.value })),
+  );
+
+  form.querySelector('[data-forgot]')?.addEventListener('click', async () => {
+    if (!form.email.value.trim()) return showErr('Digite seu e-mail acima para receber o link de nova senha.');
+    showErr('');
+    busy(true, 'Enviando…');
+    try {
+      await resetPassword(form.email.value);
+      toast('Enviamos o link para redefinir a senha. Confira seu e-mail.');
+    } catch (e) {
+      showErr(e.message);
+    } finally {
+      busy(false);
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const mail = form.email.value.trim();
+    const pass = form.password.value;
+    const name = form.name?.value.trim() || '';
+    if (!/^\S+@\S+\.\S+$/.test(mail)) return showErr('Informe um e-mail válido.');
+    if (pass.length < 6) return showErr(login ? 'Informe sua senha (mínimo de 6 caracteres).' : 'A senha precisa ter pelo menos 6 caracteres.');
+    showErr('');
+    busy(true, login ? 'Entrando…' : 'Criando…');
+    try {
+      if (login) {
+        await signIn(mail, pass);
+        const i = cloudInfo();
+        // com dados na nuvem, onCloudChange('data') já entrou no app; aqui só falta o caso da conta vazia
+        if (!S.settings.onboarded) {
+          if (i.state === 'error') throw new Error(i.error);
+          await startAccount(name || pendingName(mail));
+        }
+      } else {
+        const r = await signUp(mail, pass);
+        if (r.confirm) {
+          if (name) pendingName(mail, name);
+          return showOnboarding({ tab: 'login', email: mail, notice: `Enviamos um link para ${mail}. Confirme e depois entre aqui.` });
+        }
+        await startAccount(name);
+      }
+    } catch (ex) {
+      busy(false);
+      showErr(ex.message);
+    }
+  });
+}
+
+/** Tela antiga, sem conta (build sem Supabase). */
+function showOnboardingLocal() {
   app.innerHTML = `<div class="onboard">
     <div class="ob-logo">${LOGO}</div>
     <h1>Ruffino <span>Finanças</span></h1>
@@ -218,9 +323,17 @@ window.addEventListener('hashchange', () => {
 });
 
 applyTheme();
+// link de "Esqueci minha senha": o Supabase devolve os tokens na URL (#...type=recovery) e a limpa ao ler
+const recovering = /type=recovery/.test(location.hash);
 if (!S.settings.onboarded) showOnboarding();
 else if (S.settings.pinHash) showLock();
 else start();
+if (recovering)
+  startRecovery().then((ok) => {
+    if (!ok) return toast('O link de nova senha expirou. Peça outro em “Esqueci minha senha”.');
+    // aparelho ainda sem dados: depois da senha nova, baixa a conta (onCloudChange('data') entra no app)
+    openNewPassword({ onDone: () => !S.settings.onboarded && syncNow() });
+  });
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator && !isNative() && location.protocol === 'https:') {
   navigator.serviceWorker.register('./sw.js').catch(() => {});

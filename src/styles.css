@@ -348,6 +348,16 @@ input[type=checkbox][role=switch]:checked::after{transform:translateX(18px)}
 .ob-feats{display:grid;gap:10px;margin:6px 0 8px}
 .ob-feats li{display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:12px;background:var(--surface);border:1px solid var(--line);font-weight:600;font-size:14px}
 .ob-feats .ic{color:var(--gold)}
+.ob-tabs{margin-top:14px}
+.ob-tabs .seg-btn{min-height:42px;border:0;background:transparent;font-family:inherit}
+.ob-tabs .seg-btn.on{background:var(--surface);color:var(--gold)}
+.ob-form{display:flex;flex-direction:column;gap:12px}
+.ob-notice{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:var(--gold-tint);border:1px solid var(--gold);font-size:13.5px;font-weight:600;color:var(--ink)}
+.ob-notice .ic{color:var(--gold);flex:none;margin-top:2px}
+.ob-link{background:none;border:0;padding:6px 4px;font:inherit;font-size:13px;font-weight:600;color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.ob-link:hover{color:var(--gold)}
+.ob-link:disabled{opacity:.5;cursor:default}
+.ob-link.center{align-self:center}
 .pin{display:flex;flex-direction:column;gap:16px;align-items:center}
 .pin-dots{display:flex;gap:14px;justify-content:center}
 .pin-dots i{width:14px;height:14px;border-radius:50%;border:2px solid var(--gold);transition:background .15s}

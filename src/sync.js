@@ -70,7 +70,8 @@ function friendly(e) {
   if (/Invalid login credentials/i.test(m)) return 'E-mail ou senha incorretos.';
   if (/Email not confirmed/i.test(m)) return 'Confirme o e-mail pelo link que chegou na sua caixa de entrada e tente de novo.';
   if (/already registered|already been registered/i.test(m)) return 'Este e-mail já tem conta. Use “Entrar”.';
-  if (/signups? not allowed|signup.*disabled/i.test(m)) return 'Novos cadastros estão desativados neste projeto. Entre com o e-mail e a senha que você já usa no CRM.';
+  if (/signups? not allowed|signup.*disabled/i.test(m)) return 'Novos cadastros estão desativados no momento. Entre com uma conta que já existe.';
+  if (/same.*password|different from the old/i.test(m)) return 'A senha nova precisa ser diferente da atual.';
   if (/Password should be/i.test(m)) return 'A senha precisa ter pelo menos 6 caracteres.';
   if (/ruffino_financas_estado|42P01|PGRST205|schema cache/i.test(m)) return 'A tabela ruffino_financas_estado não existe no Supabase. Rode o arquivo supabase/schema.sql no SQL Editor.';
   if (/Failed to fetch|NetworkError|network/i.test(m)) return 'Sem conexão com o Supabase. Os dados ficam salvos no aparelho e sobem quando a internet voltar.';
@@ -78,17 +79,19 @@ function friendly(e) {
   return m || 'Erro desconhecido.';
 }
 
+let creating = null; // evita dois clientes quando initCloud e startRecovery chegam juntos
 async function getClient() {
   if (!cloudConfigured()) return null;
-  if (!client) {
-    const { createClient } = await import('@supabase/supabase-js');
-    client = createClient(url(), key(), { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'ruffino-financas:auth' } });
-    client.auth.onAuthStateChange((_ev, s) => {
-      session = s;
-      if (!s && state !== 'off') setState('signedOut');
-      emit('auth');
-    });
-  }
+  if (!client)
+    await (creating ||= import('@supabase/supabase-js').then(({ createClient }) => {
+      client = createClient(url(), key(), { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'ruffino-financas:auth' } });
+      client.auth.onAuthStateChange((_ev, s) => {
+        session = s;
+        if (!s && state !== 'off') setState('signedOut');
+        emit('auth');
+      });
+      creating = null;
+    }));
   return client;
 }
 
@@ -141,6 +144,34 @@ export async function signUp(email, password) {
   setState('idle');
   await syncNow();
   return { confirm: false };
+}
+
+/**
+ * Envia o e-mail de redefinição de senha. Na web o link volta para esta página; no app Android
+ * (https://localhost) vale a URL do site configurada no Supabase.
+ */
+export async function resetPassword(email) {
+  const sb = await getClient();
+  const here = location.hostname !== 'localhost' && /^https?:$/.test(location.protocol) ? location.origin + location.pathname : undefined;
+  const { error } = await sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: here });
+  if (error) throw new Error(friendly(error));
+}
+
+/** Aberto pelo link de nova senha: recupera a sessão que veio na URL, sem sincronizar ainda. */
+export async function startRecovery() {
+  const sb = await getClient();
+  if (!sb) return false;
+  const { data } = await sb.auth.getSession();
+  if (!data.session) return false;
+  session = data.session;
+  setState('idle');
+  return true;
+}
+
+export async function updatePassword(password) {
+  const sb = await getClient();
+  const { error } = await sb.auth.updateUser({ password });
+  if (error) throw new Error(friendly(error));
 }
 
 export async function signOut() {

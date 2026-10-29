@@ -2,12 +2,13 @@
 // Na fatura, tudo entra na fatura escolhida; parcelas ("PARC 03/10") entram só nela, com o valor
 // da parcela, ligadas à mesma compra das faturas anteriores. As parcelas futuras não são criadas:
 // ficam "a importar" (ocupam o limite e o quanto falta) até chegar a fatura seguinte.
-import { S, save, categoriesOf, descriptionsIndex, invoiceFor, card, currentInvoice, invoiceCloseDate, invoiceDueDate } from '../store.js';
+import { S, save, categoriesOf, descriptionsIndex, invoiceFor, card, currentInvoice, invoiceCloseDate, invoiceDueDate, NEUTRAL_TYPES, COLORS } from '../store.js';
 import { esc, icon, uid, shortDate, addMonths, monthLabel, shiftDate, isoDate } from '../util.js';
 import { UI, $m, pageHead, empty, on, rerender, toast, go, confirmSheet } from '../ui.js';
 import { parseCsv, parseOfx, parseInstallment, isInvoicePayment } from '../importer.js';
 
-const STATE = { rows: [], file: '', target: '', invoice: '', positive: true };
+// newCats: categorias citadas no CSV que ainda não existem; só entram no app se forem usadas na importação.
+const STATE = { rows: [], file: '', target: '', invoice: '', positive: true, newCats: [] };
 
 const cardOf = (target) => (target.startsWith('card:') ? card(target.slice(5)) : null);
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9à-ú]+/g, ' ').trim();
@@ -26,10 +27,32 @@ function kindOf(r) {
   return r.amount > 0 === STATE.positive ? 'expense' : 'refund';
 }
 
+/** Categorias que a linha aceita: as do tipo, as de transferência/reembolso e as novas vindas do CSV. */
+const catChoices = (type) => {
+  const ok = (t) => t === type || NEUTRAL_TYPES[t];
+  return { main: [...categoriesOf(type), ...STATE.newCats.filter((c) => c.type === type)], neutral: [...Object.keys(NEUTRAL_TYPES).flatMap((t) => categoriesOf(t)), ...STATE.newCats.filter((c) => ok(c.type) && c.type !== type)] };
+};
+
 function guessCategory(desc, type) {
   const known = descriptionsIndex().get(desc);
-  if (known && S.categories.find((c) => c.id === known)?.type === type) return known;
+  const knownType = S.categories.find((c) => c.id === known)?.type;
+  if (known && (knownType === type || NEUTRAL_TYPES[knownType])) return known;
   return (categoriesOf(type).find((c) => c.name === 'Outros') || categoriesOf(type)[0])?.id;
+}
+
+const NEW_ICON = { income: 'banknote', expense: 'tag', transfer: 'arrow-left-right', refund: 'rotate-ccw' };
+
+/** Categoria escrita na coluna do CSV: acha pelo nome ou prepara uma nova (o tipo vem da coluna Tipo). */
+function csvCategory(r, type) {
+  if (!r.category) return null;
+  const name = r.category.trim();
+  const { main, neutral } = catChoices(type);
+  const found = [...main, ...neutral].find((c) => norm(c.name) === norm(name));
+  if (found) return found.id;
+  const t = /transf/i.test(r.type) ? 'transfer' : /reembolso|estorno/i.test(r.type) ? 'refund' : type;
+  const cat = { id: uid(), name, type: t, icon: NEW_ICON[t], color: COLORS[(S.categories.length + STATE.newCats.length) % COLORS.length] };
+  STATE.newCats.push(cat);
+  return cat.id;
 }
 
 /** Já existe? Na conta: mesma data, valor e descrição. No cartão: mesma fatura (ou a mesma parcela da compra). */
@@ -61,7 +84,7 @@ function refresh() {
     const kind = kindOf(r);
     if (kind !== r.kind) {
       r.kind = kind;
-      if (!r.catTouched) r.categoryId = kind === 'expense' || kind === 'income' ? guessCategory(r.inst ? r.inst.base : r.desc, kind) : null;
+      if (!r.catTouched) r.categoryId = kind === 'expense' || kind === 'income' ? csvCategory(r, kind) || guessCategory(r.inst ? r.inst.base : r.desc, kind) : null;
     }
     r.dup = isDuplicate(r);
     if (!r.offTouched) r.on = !r.dup && kind !== 'payment';
@@ -69,6 +92,12 @@ function refresh() {
 }
 
 const KIND_LABEL = { refund: 'Estorno / crédito na fatura', payment: 'Pagamento da fatura anterior (não importa)' };
+
+function catSelect(r, i) {
+  const { main, neutral } = catChoices(r.kind);
+  const opt = (ct) => `<option value="${ct.id}" ${ct.id === r.categoryId ? 'selected' : ''}>${esc(ct.name)}</option>`;
+  return `<select class="mini-select" data-input="import-cat" data-i="${i}" aria-label="Categoria">${main.map(opt).join('')}${neutral.length ? `<optgroup label="Não computa">${neutral.map(opt).join('')}</optgroup>` : ''}</select>`;
+}
 
 export function renderImport() {
   const holders = [...S.cards.filter((c) => !c.archived).map((c) => [`card:${c.id}`, `Fatura · ${c.name}`]), ...S.accounts.filter((a) => !a.archived).map((a) => [a.id, `Extrato · ${a.name}`])];
@@ -100,7 +129,7 @@ export function renderImport() {
         <input type="checkbox" data-input="import-row" data-i="${i}" ${r.on ? 'checked' : ''}>
         <span class="grow"><b>${esc(r.inst ? r.inst.base : r.desc || '(sem descrição)')}${r.inst ? ` <span class="tag-badge">parcela ${r.inst.n}/${r.inst.total}</span>` : ''}</b>
           <small>${r.inst ? `compra em ${shortDate(r.date)}` : shortDate(r.date)}${r.dup ? ' · <span class="neg">já lançado</span>' : ''}${KIND_LABEL[r.kind] ? ` · ${KIND_LABEL[r.kind]}` : ''}</small></span>
-        ${r.kind === 'expense' || r.kind === 'income' ? `<select class="mini-select" data-input="import-cat" data-i="${i}" aria-label="Categoria">${categoriesOf(r.kind).map((ct) => `<option value="${ct.id}" ${ct.id === r.categoryId ? 'selected' : ''}>${esc(ct.name)}</option>`).join('')}</select>` : ''}
+        ${r.kind === 'expense' || r.kind === 'income' ? catSelect(r, i) : ''}
         <span class="num ${r.kind === 'income' || r.kind === 'refund' ? 'pos' : 'neg'}">${$m(Math.abs(r.amount))}</span></label></li>`).join('')}</ul>
       <div class="form-actions"><button class="btn primary" data-action="import-run">${icon('check', 18)} Importar ${sel.length} lançamento(s)</button></div>
     </article>` : `<article class="card">${empty('file-text', 'Nenhum arquivo carregado', 'Escolha a fatura do cartão (CSV) ou o extrato da conta (OFX/CSV) para ver a prévia antes de importar.')}</article>`}
@@ -133,7 +162,8 @@ export async function handleImportInput(el) {
     el.value = '';
     if (!rows.length) return toast('Não encontramos lançamentos nesse arquivo.');
     STATE.file = file.name;
-    STATE.rows = rows.map((r) => ({ ...r, inst: parseInstallment(r.desc), kind: null }));
+    STATE.newCats = [];
+    STATE.rows =rows.map((r) => ({ ...r, inst: parseInstallment(r.desc), kind: null }));
     // compras positivas ou negativas? vale o sinal da maioria das linhas que não são pagamento
     const body = STATE.rows.filter((r) => !isInvoicePayment(r.desc));
     STATE.positive = body.filter((r) => r.amount > 0).length >= body.filter((r) => r.amount < 0).length;
@@ -202,10 +232,13 @@ on({
     const cyc = c ? cycleOf(c, STATE.invoice) : null;
     const importId = uid();
     S.importLog = [{ id: importId, at: new Date().toISOString(), file: STATE.file, target: STATE.target, invoice: c ? STATE.invoice : null }, ...(S.importLog || [])].slice(0, 30);
+    const used = new Set(sel.map((r) => r.categoryId));
+    S.categories.push(...STATE.newCats.filter((ct) => used.has(ct.id)));
     let n = 0;
     for (const r of sel) {
       if (r.kind === 'payment') continue;
-      const base = { id: uid(), amount: Math.abs(r.amount), desc: r.desc, categoryId: r.categoryId || undefined, paid: true, tags: ['importado'], note: '', fitid: r.fitid || undefined, importId };
+      const tags = ['importado', ...(r.tags || []).filter((t) => t !== 'importado')];
+      const base = { id: uid(), amount: Math.abs(r.amount), desc: r.desc, categoryId: r.categoryId || undefined, paid: true, tags, note: '', fitid: r.fitid || undefined, importId };
       if (c) {
         // sempre na fatura escolhida; a data fica dentro do período dela (parcelas antigas não voltam no tempo)
         const date = r.date >= cyc.start && r.date <= cyc.end ? r.date : cyc.end;
@@ -220,7 +253,7 @@ on({
     toast(c ? `${n} lançamento(s) importado(s) na fatura de ${monthLabel(STATE.invoice)}.` : `${n} lançamento(s) importado(s).`);
     const dest = c ? `#/cartao/${c.id}` : '#/transacoes';
     if (c) UI.invoice[c.id] = STATE.invoice;
-    Object.assign(STATE, { rows: [], file: '' });
+    Object.assign(STATE, { rows: [], file: '', newCats: [] });
     go(dest);
   },
 });

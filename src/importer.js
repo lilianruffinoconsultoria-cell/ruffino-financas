@@ -40,7 +40,7 @@ function splitLine(line, sep) {
 
 /**
  * CSV com colunas de data, descrição e valor (negativo = saída). Aceita também
- * coluna de tipo (Receita/Despesa) e de categoria. Detecta ";" ou "," e o cabeçalho.
+ * colunas de tipo (Receita/Despesa/Transferência/Reembolso), categoria e tags. Detecta ";" ou "," e o cabeçalho.
  */
 export function parseCsv(text) {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
@@ -58,6 +58,7 @@ export function parseCsv(text) {
   const iVal = find(/valor|amount|quantia/, 2);
   const iType = hasHeader ? head.findIndex((h) => /^tipo|type|natureza/.test(h)) : -1;
   const iCat = hasHeader ? head.findIndex((h) => /categ/.test(h)) : -1;
+  const iTags = hasHeader ? head.findIndex((h) => /^tags?$|etiqueta/.test(h)) : -1;
   if (hasHeader) rows = rows.slice(1);
   return rows
     .map((r) => {
@@ -65,7 +66,14 @@ export function parseCsv(text) {
       let amount = toNumber(r[iVal]);
       if (!date || amount == null || !amount) return null;
       if (iType >= 0 && /despesa|d[eé]bito|sa[ií]da|expense/i.test(r[iType]) && amount > 0) amount = -amount;
-      return { date, desc: (r[iDesc] || '').slice(0, 80), amount, category: iCat >= 0 ? r[iCat] : '' };
+      return {
+        date,
+        desc: (r[iDesc] || '').slice(0, 80),
+        amount,
+        category: iCat >= 0 ? r[iCat] || '' : '',
+        type: iType >= 0 ? r[iType] || '' : '',
+        tags: iTags >= 0 ? (r[iTags] || '').split(/[\s,]+/).map((t) => t.replace(/^#/, '').toLowerCase()).filter(Boolean) : [],
+      };
     })
     .filter(Boolean);
 }
