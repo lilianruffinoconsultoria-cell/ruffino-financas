@@ -79,7 +79,7 @@ function friendly(e) {
   return m || 'Erro desconhecido.';
 }
 
-let creating = null; // evita dois clientes quando initCloud e startRecovery chegam juntos
+let creating = null; // evita dois clientes quando initCloud e sessionFromLink chegam juntos
 async function getClient() {
   if (!cloudConfigured()) return null;
   if (!client)
@@ -132,10 +132,16 @@ export async function signIn(email, password) {
   return syncNow();
 }
 
+/**
+ * Para onde voltam os links do e-mail (confirmação e nova senha): na web, esta página; no app
+ * Android (https://localhost) vale a URL do site configurada no Supabase.
+ */
+const returnUrl = () => (location.hostname !== 'localhost' && /^https?:$/.test(location.protocol) ? location.origin + location.pathname : undefined);
+
 /** Cria a conta. Se o projeto exige confirmação por e-mail, devolve { confirm: true }. */
 export async function signUp(email, password) {
   const sb = await getClient();
-  const { data, error } = await sb.auth.signUp({ email: email.trim(), password });
+  const { data, error } = await sb.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: returnUrl() } });
   if (error) throw new Error(friendly(error));
   if (!data.session) return { confirm: true };
   session = data.session;
@@ -146,19 +152,15 @@ export async function signUp(email, password) {
   return { confirm: false };
 }
 
-/**
- * Envia o e-mail de redefinição de senha. Na web o link volta para esta página; no app Android
- * (https://localhost) vale a URL do site configurada no Supabase.
- */
+/** Envia o e-mail de redefinição de senha. */
 export async function resetPassword(email) {
   const sb = await getClient();
-  const here = location.hostname !== 'localhost' && /^https?:$/.test(location.protocol) ? location.origin + location.pathname : undefined;
-  const { error } = await sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: here });
+  const { error } = await sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: returnUrl() });
   if (error) throw new Error(friendly(error));
 }
 
-/** Aberto pelo link de nova senha: recupera a sessão que veio na URL, sem sincronizar ainda. */
-export async function startRecovery() {
+/** Aberto por um link do e-mail (confirmação ou nova senha): recupera a sessão que veio na URL, sem sincronizar ainda. */
+export async function sessionFromLink() {
   const sb = await getClient();
   if (!sb) return false;
   const { data } = await sb.auth.getSession();

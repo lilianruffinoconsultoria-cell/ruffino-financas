@@ -17,7 +17,7 @@ import { renderCalendar } from './views/calendar.js';
 import { renderTags } from './views/tags.js';
 import { renderImport, handleImportInput } from './views/import.js';
 import { renderInstallments } from './views/installments.js';
-import { initCloud, onCloudChange, cloudConfigured, cloudInfo, signIn, signUp, resetPassword, syncNow, startRecovery } from './sync.js';
+import { initCloud, onCloudChange, cloudConfigured, cloudInfo, signIn, signUp, resetPassword, syncNow, sessionFromLink } from './sync.js';
 import { openLogin, openNewPassword } from './views/cloud.js';
 
 const ROUTES = [
@@ -220,7 +220,8 @@ function showOnboarding({ tab = 'login', email = '', notice = '' } = {}) {
     e.preventDefault();
     const mail = form.email.value.trim();
     const pass = form.password.value;
-    const name = form.name?.value.trim() || '';
+    // form.name é o atributo "name" do próprio <form> quando não há campo de nome (aba Entrar)
+    const name = form.elements.namedItem('name')?.value.trim() || '';
     if (!/^\S+@\S+\.\S+$/.test(mail)) return showErr('Informe um e-mail válido.');
     if (pass.length < 6) return showErr(login ? 'Informe sua senha (mínimo de 6 caracteres).' : 'A senha precisa ter pelo menos 6 caracteres.');
     showErr('');
@@ -323,16 +324,34 @@ window.addEventListener('hashchange', () => {
 });
 
 applyTheme();
-// link de "Esqueci minha senha": o Supabase devolve os tokens na URL (#...type=recovery) e a limpa ao ler
-const recovering = /type=recovery/.test(location.hash);
-if (!S.settings.onboarded) showOnboarding();
+// links do e-mail: o Supabase devolve os tokens na URL (#access_token=...&type=signup|recovery) e a limpa ao ler;
+// se o link já foi usado ou venceu, volta com #error_code=... (limpamos aqui e avisamos)
+const link = new URLSearchParams(location.hash.slice(1));
+const linkType = link.get('access_token') ? link.get('type') : null;
+const linkError = link.get('error_code');
+if (linkError) history.replaceState(null, '', location.pathname + location.search);
+const LINK_ERROR =
+  linkError === 'otp_expired'
+    ? 'Este link já foi usado ou venceu. Se você já confirmou o e-mail, é só entrar com e-mail e senha.'
+    : 'Não foi possível usar o link do e-mail. Entre com e-mail e senha ou peça um link novo.';
+
+if (!S.settings.onboarded) showOnboarding(linkError ? { notice: LINK_ERROR } : {});
 else if (S.settings.pinHash) showLock();
 else start();
-if (recovering)
-  startRecovery().then((ok) => {
+if (linkError && S.settings.onboarded) toast(LINK_ERROR);
+
+if (linkType === 'recovery')
+  sessionFromLink().then((ok) => {
     if (!ok) return toast('O link de nova senha expirou. Peça outro em “Esqueci minha senha”.');
     // aparelho ainda sem dados: depois da senha nova, baixa a conta (onCloudChange('data') entra no app)
     openNewPassword({ onDone: () => !S.settings.onboarded && syncNow() });
+  });
+else if (linkType && !S.settings.onboarded)
+  // confirmação do cadastro: já entra na conta; sem dados na nuvem, começa do zero com o nome do cadastro
+  sessionFromLink().then(async (ok) => {
+    if (!ok) return;
+    await syncNow();
+    if (!S.settings.onboarded) startAccount(pendingName(cloudInfo().email || ''));
   });
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator && !isNative() && location.protocol === 'https:') {
