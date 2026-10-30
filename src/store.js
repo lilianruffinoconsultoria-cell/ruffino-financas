@@ -1,5 +1,5 @@
 // Estado do app, persistência local e regras financeiras (saldos, faturas, orçamento).
-import { uid, round2, sum, today, monthOf, addMonths, shiftDate, monthEnd, dateIn, thisMonth } from './util.js';
+import { uid, round2, sum, today, monthOf, addMonths, shiftDate, monthEnd, dateIn, thisMonth, money } from './util.js';
 
 const KEY = 'ruffino-financas:v1';
 
@@ -8,6 +8,29 @@ export const COLORS = ['#C5A059', '#4CA3A0', '#E07A5F', '#8E7CC3', '#5B9BD5', '#
 export const ACCOUNT_TYPES = { checking: 'Conta corrente', savings: 'Poupança', wallet: 'Carteira', investment: 'Investimento', other: 'Outra' };
 export const ACCOUNT_ICONS = { checking: 'landmark', savings: 'piggy-bank', wallet: 'wallet', investment: 'trending-up', other: 'coins' };
 export const SCOPES = { pf: 'Pessoal', pj: 'Empresa' };
+
+/** Blocos da tela Início, na ordem em que aparecem (chave, nome, descrição). */
+export const HOME_BLOCKS = [
+  ['balance', 'Saldo geral', 'Saldo atual e previsão para o fim do mês'],
+  ['summary', 'Receitas e despesas do mês', 'Os dois totais logo abaixo do saldo'],
+  ['quick', 'Atalhos de lançamento', 'Botões de despesa, receita, transferência e cartão'],
+  ['calendar', 'Calendário do mês', 'Cartão compacto com as contas do mês'],
+  ['accounts', 'Contas', 'Saldo de cada conta'],
+  ['cards', 'Cartões de crédito', 'Faturas, limite e melhor cartão para comprar'],
+  ['categories', 'Despesas por categoria', 'Gráfico com as maiores categorias do mês'],
+  ['planning', 'Planejamento', 'Gasto contra o limite planejado'],
+  ['pending', 'Pendências até o fim do mês', 'Contas a pagar e a receber em aberto'],
+  ['installments', 'Parcelamentos', 'O que falta pagar fora do cartão'],
+  ['goals', 'Objetivos', 'Progresso das metas de economia'],
+  ['tip', 'Dica da consultora', 'Dica do dia e contato com a consultora'],
+];
+/** Padrão: tudo ligado, menos o calendário. */
+export const defaultHomeBlocks = () => Object.fromEntries(HOME_BLOCKS.map(([k]) => [k, k !== 'calendar']));
+/** Blocos do Início na ordem escolhida em `settings.homeOrder` (chaves novas entram no fim, na ordem padrão). */
+export function homeBlocksOrdered() {
+  const saved = (S.settings.homeOrder || []).filter((k) => HOME_BLOCKS.some(([x]) => x === k));
+  return [...saved, ...HOME_BLOCKS.map(([k]) => k).filter((k) => !saved.includes(k))].map((k) => HOME_BLOCKS.find(([x]) => x === k));
+}
 
 const DEFAULT_CATEGORIES = [
   ['Alimentação', 'expense', 'utensils', '#E07A5F'],
@@ -51,8 +74,8 @@ function neutralDefaults() {
 
 function blank() {
   return {
-    version: 3,
-    settings: { theme: 'dark', hide: false, name: '', pinHash: null, onboarded: false, autoPay: false, travelTag: '', smartAlert: true },
+    version: 4,
+    settings: { theme: 'dark', hide: false, name: '', pinHash: null, onboarded: false, autoPay: false, travelTag: '', smartAlert: true, payablesView: 'list', business: false, homeBlocks: defaultHomeBlocks() },
     accounts: [],
     cards: [],
     categories: [...DEFAULT_CATEGORIES.map(([name, type, icon, color]) => ({ id: uid(), name, type, icon, color })), ...neutralDefaults()],
@@ -74,7 +97,15 @@ function migrate(data) {
   delete s.budgets;
   // v3: categorias de transferência e reembolso para quem já usava o app
   if ((s.version || 1) < 3) for (const c of neutralDefaults()) if (!s.categories.some((x) => x.id === c.id)) s.categories.push(c);
-  s.version = 3;
+  // v4: parcelamentos viraram parte de "A pagar e receber"; parcelas já pagas guardam o vencimento (= data)
+  if ((s.version || 1) < 4)
+    for (const t of s.transactions) if (t.installment && t.groupId && !t.cardId && !t.prior && t.paid && !t.dueDate && (t.type === 'expense' || t.type === 'income')) t.dueDate = t.date;
+  s.version = 4;
+  s.settings.business = !!s.settings.business;
+  // calendarHome virou o bloco "calendar" de homeBlocks (tela inicial personalizável)
+  const saved = data.settings?.homeBlocks;
+  s.settings.homeBlocks = { ...defaultHomeBlocks(), ...(saved && typeof saved === 'object' ? saved : { calendar: !!data.settings?.calendarHome }) };
+  delete s.settings.calendarHome;
   return s;
 }
 
@@ -89,6 +120,9 @@ function load() {
 }
 
 export let S = load();
+
+/** O bloco está ligado na tela Início? */
+export const homeBlockOn = (key) => S.settings.homeBlocks?.[key] ?? key !== 'calendar';
 
 const saveListeners = new Set();
 /** Avisa quem precisa saber que os dados mudaram (ex.: sincronização com a nuvem). */
@@ -121,7 +155,10 @@ export const account = (id) => byId(S.accounts, id);
 export const card = (id) => byId(S.cards, id);
 /** Categorias principais de um tipo (sem as subcategorias). */
 export const categoriesOf = (type, { archived = false } = {}) =>
-  S.categories.filter((c) => c.type === type && !c.parentId && (archived ? c.archived : !c.archived));
+  S.categories.filter((c) => c.type === type && !c.parentId && (archived ? c.archived : !c.archived) && !hiddenBusinessCat(c));
+/** Sem finanças da empresa, a categoria padrão "Empresa" some das escolhas se não tiver lançamentos. */
+const hiddenBusinessCat = (c) =>
+  !S.settings.business && c.type === 'expense' && c.name === 'Empresa' && !S.transactions.some((t) => t.categoryId === c.id);
 export const subcategoriesOf = (id, { archived = false } = {}) => S.categories.filter((c) => c.parentId === id && (archived || !c.archived));
 /** Categoria principal de uma (sub)categoria. */
 export const rootId = (id) => category(id).parentId || id;
@@ -175,8 +212,9 @@ export function applyAutoPay() {
   const t0 = today();
   let changed = false;
   for (const t of S.transactions)
-    if (!t.paid && !t.cardId && (t.type === 'expense' || t.type === 'income' || t.type === 'transfer') && t.date <= t0) {
+    if (!t.paid && !t.cardId && (t.type === 'expense' || t.type === 'transfer') && t.date <= t0) {
       t.paid = true;
+      if (t.type !== 'transfer' && !t.prior) t.dueDate = t.date; // continua em A pagar e receber, como baixada
       changed = true;
     }
   if (changed) save();
@@ -253,7 +291,9 @@ export function adjustBalanceWithTransaction(accId, real) {
   save();
 }
 
+/** Exclusão de conta: os lançamentos vão para `toId`; os reajustes de saldo da conta excluída são descartados. */
 export function moveTransactions(fromId, toId) {
+  S.transactions = S.transactions.filter((t) => !(t.adjust && t.accountId === fromId));
   for (const t of S.transactions) {
     if (t.accountId === fromId) t.accountId = toId;
     if (t.toAccountId === fromId) t.toAccountId = toId;
@@ -330,11 +370,62 @@ export function bestCard(scope = 'all') {
 /** Parcelas futuras de compras no cartão que podem ser antecipadas para a fatura informada. */
 export const anticipatable = (cardId, targetYm) =>
   S.transactions.filter((t) => t.type === 'expense' && t.cardId === cardId && t.installment && !t.prior && t.invoice > targetYm).sort((a, b) => a.invoice.localeCompare(b.invoice));
-export function anticipate(ids, targetYm) {
-  for (const t of S.transactions) if (ids.includes(t.id)) {
-    t.invoice = targetYm;
-    t.anticipated = true;
+/** Antecipa parcelas para `targetYm`; fatura já fechada não recebe parcelas (vão para a fatura aberta). Devolve a fatura usada. */
+export function anticipate(ids, targetYm, { discount = 0 } = {}) {
+  const first = S.transactions.find((t) => ids.includes(t.id));
+  const c = first && card(first.cardId);
+  if (c && targetYm < currentInvoice(c)) targetYm = currentInvoice(c);
+  const anticipationId = uid(); // liga as parcelas e o desconto desta antecipação (para desfazer)
+  let moved = 0;
+  for (const t of S.transactions) if (ids.includes(t.id) && t.invoice > targetYm) {
+    t.anticipatedFrom ||= t.invoice;
+    Object.assign(t, { invoice: targetYm, anticipated: true, anticipationId });
+    moved++;
   }
+  if (moved && c && discount > 0.004)
+    S.transactions.push({ id: uid(), type: 'refund', amount: round2(discount), desc: 'Desconto da antecipação', cardId: c.id, invoice: targetYm, date: today(), paid: true, tags: [], anticipationId });
+  save();
+  return targetYm;
+}
+
+/** Desfaz uma antecipação: as parcelas voltam às faturas de origem e o desconto lançado sai. */
+export function undoAnticipation(anticipationId) {
+  if (!anticipationId) return 0;
+  let n = 0;
+  S.transactions = S.transactions.filter((t) => !(t.anticipationId === anticipationId && t.type === 'refund'));
+  for (const t of S.transactions)
+    if (t.anticipationId === anticipationId) {
+      if (t.anticipatedFrom) t.invoice = t.anticipatedFrom;
+      for (const k of ['anticipated', 'anticipatedFrom', 'anticipationId']) delete t[k];
+      n++;
+    }
+  save();
+  return n;
+}
+
+/**
+ * Rotativo: o que ficou sem pagar na fatura `ym` vai para a fatura seguinte (dois ajustes ligados por
+ * `carryId`); juros/encargos informados entram na fatura seguinte como despesa em "Juros e multas".
+ */
+export function carryInvoiceRest(cardId, ym, { interest = 0, date = today() } = {}) {
+  const c = card(cardId);
+  const rest = round2(invoiceTotal(cardId, ym) - invoicePaid(cardId, ym));
+  if (!c || rest <= 0.004) return null;
+  const next = addMonths(ym, 1);
+  const carryId = uid();
+  const base = { cardId, date, paid: true, tags: [], carryId };
+  S.transactions.push(
+    { ...base, id: uid(), type: 'invoiceAdjust', invoice: ym, delta: -rest, amount: rest, desc: 'Saldo levado para a próxima fatura' },
+    { ...base, id: uid(), type: 'invoiceAdjust', invoice: next, delta: rest, amount: rest, desc: 'Saldo da fatura anterior (rotativo)' },
+  );
+  if (interest > 0.004) S.transactions.push({ ...base, id: uid(), type: 'expense', invoice: next, amount: round2(interest), desc: 'Juros e encargos do rotativo', categoryId: interestCategory('expense') });
+  save();
+  return { rest, next, carryId };
+}
+/** Desfaz o rotativo: tira os ajustes e os juros ligados ao mesmo `carryId`. */
+export function undoCarry(carryId) {
+  if (!carryId) return;
+  S.transactions = S.transactions.filter((t) => t.carryId !== carryId);
   save();
 }
 /** Composição da fatura: compras à vista, parcelas do mês e créditos (estornos/ajustes). */
@@ -427,8 +518,10 @@ export function editableBudget(ym) {
  *   No cartão, essa parcela entra na fatura da data; fora dele, vence na data.
  *   As parcelas anteriores ficam marcadas como `prior` (já pagas antes do controle no app):
  *   aparecem no histórico da compra, mas não mexem em saldo, fatura, limite nem relatórios.
+ * - `schedule`: [{ date, amount }] por parcela (fora do cartão, compra nova): vencimentos e valores
+ *   ajustados à mão; substitui o cálculo mensal e a divisão igual.
  */
-export function addTransaction(base, repeat = 'none', times = 1, { perInstallment = false, startAt = 1 } = {}) {
+export function addTransaction(base, repeat = 'none', times = 1, { perInstallment = false, startAt = 1, schedule = null } = {}) {
   const groupId = repeat === 'none' ? null : uid();
   const n = repeat === 'installments' ? Math.max(2, times) : repeat === 'fixed' ? 12 : 1;
   const k = repeat === 'installments' ? Math.min(n, Math.max(1, Math.floor(startAt) || 1)) : 1;
@@ -443,6 +536,7 @@ export function addTransaction(base, repeat = 'none', times = 1, { perInstallmen
     if (repeat === 'installments') {
       t.amount = i === 0 ? round2(total - per * (n - 1)) : per;
       t.installment = { n: i + 1, total: n };
+      if (schedule?.[i] && !c && k === 1) Object.assign(t, { date: schedule[i].date || t.date, amount: round2(schedule[i].amount) || t.amount });
     }
     if (repeat === 'fixed') t.fixed = true;
     if (c) {
@@ -470,7 +564,7 @@ export function ensureRecurring(ym) {
     let i = 1;
     while (monthOf(shiftDate(last.date, i)) <= ym) {
       const t = { ...last, id: uid(), date: shiftDate(last.date, i), paid: !!last.cardId };
-      delete t.receipt;
+      for (const k of ['receipt', 'dueDate', 'baixa', 'reconciled', 'fitid', 'importId']) delete t[k]; // marcas de baixa/importação não se repetem
       if (last.cardId) t.invoice = addMonths(last.invoice, i);
       S.transactions.push(t);
       i++;
@@ -480,17 +574,23 @@ export function ensureRecurring(ym) {
   if (changed) save();
 }
 
-export function updateTransaction(id, fields, applyToFuture = false) {
+/**
+ * Atualiza um lançamento. Em séries (fixas e parcelas), `scope` diz o alcance: 'one' (só este),
+ * 'future' (este e os próximos) ou 'all' (todos da série). `true` equivale a 'future' (versões antigas).
+ * Data, situação, fatura e comprovante nunca se repetem; parcelas mantêm o próprio valor.
+ */
+export function updateTransaction(id, fields, scope = 'one') {
+  if (scope === true) scope = 'future';
   const t = byId(S.transactions, id);
   if (!t) return;
   const prevDate = t.date;
   Object.assign(t, fields);
   if (t.cardId && !t.anticipated && !t.prior) t.invoice = fields.invoice || invoiceFor(card(t.cardId), t.date);
-  if (applyToFuture && t.groupId) {
+  if ((scope === 'future' || scope === 'all') && t.groupId) {
     const shared = { ...fields };
-    for (const k of ['date', 'paid', 'invoice', 'receipt']) delete shared[k];
+    for (const k of ['date', 'paid', 'invoice', 'receipt', 'dueDate']) delete shared[k];
     if (t.installment) delete shared.amount; // cada parcela mantém o próprio valor
-    for (const o of S.transactions) if (o.groupId === t.groupId && o.id !== t.id && o.date > prevDate) Object.assign(o, shared);
+    for (const o of S.transactions) if (o.groupId === t.groupId && o.id !== t.id && (scope === 'all' || o.date > prevDate)) Object.assign(o, shared);
   }
   save();
 }
@@ -513,18 +613,117 @@ export function deleteTransaction(id, mode = 'one') {
   return removed;
 }
 
+/** Marca como pago/pendente na lista. Conta a pagar/receber marcada aqui continua na aba como baixada. */
 export function togglePaid(id) {
   const t = byId(S.transactions, id);
-  if (t && !t.cardId) {
-    t.paid = !t.paid;
-    save();
-  }
+  if (!t || t.cardId) return;
+  if (t.paid && t.dueDate) return void unsettlePayable(id);
+  t.paid = !t.paid;
+  if (t.paid && (t.type === 'expense' || t.type === 'income') && !t.prior && !t.adjust) t.dueDate = t.date;
+  save();
 }
 
 export function pendingUntil(iso, scope) {
   return S.transactions
     .filter((t) => !t.paid && (t.type === 'expense' || t.type === 'income') && !t.cardId && t.date <= iso && inScope(t, scope))
     .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ---------- contas a pagar e receber ----------
+// Uma conta é uma despesa/receita fora do cartão, em aberto (`paid:false`, `date` = vencimento) ou já baixada
+// (`paid:true` com `dueDate` = vencimento original, gravado na baixa quando a data muda).
+export const isPayable = (t) =>
+  (t.type === 'expense' || t.type === 'income') && !t.cardId && !t.prior && !t.adjust && (!t.paid || !!t.dueDate || !!t.fixed || !!t.installment);
+export const dueOf = (t) => t.dueDate || t.date;
+/** Situação: baixada | vencida | hoje | aberta. */
+export function payableState(t, now = today()) {
+  if (t.paid) return 'baixada';
+  const due = dueOf(t);
+  return due < now ? 'vencida' : due === now ? 'hoje' : 'aberta';
+}
+/** Contas com vencimento no mês. `kind`: 'pay' | 'rec' | 'all'. */
+export const payablesOf = (ym, scope, kind = 'all') =>
+  S.transactions
+    .filter((t) => isPayable(t) && monthOf(dueOf(t)) === ym && inScope(t, scope) && (kind === 'all' || t.type === (kind === 'pay' ? 'expense' : 'income')))
+    .sort((a, b) => dueOf(a).localeCompare(dueOf(b)) || (a.desc || '').localeCompare(b.desc || ''));
+/** Contas em aberto vencidas antes do mês informado. */
+export const overdueBefore = (ym, scope, kind = 'all') =>
+  S.transactions.filter((t) => isPayable(t) && !t.paid && monthOf(dueOf(t)) < ym && dueOf(t) < today() && inScope(t, scope) && (kind === 'all' || t.type === (kind === 'pay' ? 'expense' : 'income')));
+
+/** Categoria de juros: 'juros-pagos' (despesa) ou 'juros-recebidos' (receita), criada na primeira vez. */
+function interestCategory(type) {
+  const id = type === 'income' ? 'juros-recebidos' : 'juros-pagos';
+  if (!S.categories.some((c) => c.id === id))
+    S.categories.push({ id, name: type === 'income' ? 'Juros recebidos' : 'Juros e multas', type, icon: 'receipt', color: '#C25B56' });
+  return id;
+}
+
+/**
+ * Baixa de uma conta (à vista ou parcela): valor igual só marca como paga; maior registra a diferença
+ * como juros/multa. Menor: `rest` 'open' deixa o restante numa nova conta pendente; 'discount' quita com
+ * desconto (o previsto fica em `originalAmount`, como nas parcelas). Só esta conta é baixada.
+ */
+export function settlePayable(id, { date = today(), accountId, amount, rest = 'open' } = {}) {
+  const t = byId(S.transactions, id);
+  if (!t || !isPayable(t) || t.paid) return null;
+  const due = dueOf(t);
+  const value = round2(amount || t.amount);
+  const diff = round2(value - t.amount);
+  const baixa = { note: t.note || '', amount: t.amount, original: t.originalAmount };
+  if (diff < -0.004 && rest === 'discount') {
+    t.originalAmount ||= t.amount;
+    t.note = [t.note, `Desconto: ${money(-diff)}`].filter(Boolean).join(' · ');
+    t.amount = value;
+  } else if (diff < -0.004) {
+    const left = { ...t, id: uid(), amount: round2(-diff), paid: false, date: due, dueDate: due, restOf: t.id, note: `Restante de ${t.desc || category(t.categoryId).name}` };
+    for (const k of ['baixa', 'reconciled', 'receipt', 'fitid', 'importId', 'originalAmount', 'groupId', 'fixed', 'installment']) delete left[k];
+    S.transactions.push(left);
+    baixa.splitId = left.id;
+    t.amount = value;
+  } else if (diff > 0.004) {
+    // a diferença vira um lançamento próprio (Juros e multas), para aparecer separada nos relatórios
+    const extra = { id: uid(), type: t.type, amount: diff, desc: `${t.type === 'income' ? 'Juros recebidos' : 'Juros/multa'} · ${t.desc || category(t.categoryId).name}`, categoryId: interestCategory(t.type), accountId: accountId || t.accountId, date, paid: true, tags: [...(t.tags || [])], note: '', interestOf: t.id };
+    S.transactions.push(extra);
+    baixa.interestId = extra.id;
+  }
+  Object.assign(t, { paid: true, date, dueDate: due, accountId: accountId || t.accountId, baixa });
+  save();
+  return t;
+}
+
+/** Volta ao que era antes de uma conciliação de extrato (usado ao desfazer a importação). */
+export function restoreReconciled(t) {
+  const prev = t.reconciled?.prev;
+  if (!prev) return;
+  for (const k of ['paid', 'date', 'amount', 'accountId', 'note', 'fitid', 'dueDate']) {
+    if (prev[k] === undefined) delete t[k];
+    else t[k] = prev[k];
+  }
+  delete t.reconciled;
+  delete t.importId;
+}
+
+/** Estorna a baixa: volta a pendente no vencimento original (e desfaz o restante criado, se ainda em aberto). */
+export function unsettlePayable(id) {
+  const t = byId(S.transactions, id);
+  if (!t || !t.paid || !t.dueDate) return false;
+  if (t.reconciled) restoreReconciled(t);
+  else {
+    if (t.baixa) {
+      t.amount = t.baixa.amount;
+      t.note = t.baixa.note;
+      if (t.baixa.original) t.originalAmount = t.baixa.original;
+      else delete t.originalAmount;
+      if (t.baixa.splitId) S.transactions = S.transactions.filter((x) => x.id !== t.baixa.splitId || x.paid);
+      if (t.baixa.interestId) S.transactions = S.transactions.filter((x) => x.id !== t.baixa.interestId);
+    }
+    t.paid = false;
+    t.date = t.dueDate;
+    delete t.dueDate;
+  }
+  delete t.baixa;
+  save();
+  return true;
 }
 
 export function descriptionsIndex() {
@@ -550,8 +749,8 @@ export function installmentPaid(t) {
   const c = card(t.cardId);
   return !!c && (invoiceStatus(c, t.invoice) === 'paga' || invoiceDueDate(c, t.invoice) < today());
 }
-/** Data em que a parcela é cobrada: vencimento da fatura (cartão) ou a data do lançamento. */
-export const installmentDue = (t) => (t.cardId && card(t.cardId) ? invoiceDueDate(card(t.cardId), t.invoice) : t.date);
+/** Data em que a parcela é cobrada: vencimento da fatura (cartão) ou o vencimento da conta (mesmo depois de paga). */
+export const installmentDue = (t) => (t.cardId && card(t.cardId) ? invoiceDueDate(card(t.cardId), t.invoice) : t.dueDate || t.date);
 
 /**
  * Uma linha por compra parcelada, com parcelas pagas, valor pago, restante e próxima parcela.
@@ -596,8 +795,11 @@ export function installmentGroups(scope = 'all', { where = 'all', cardId = null 
       paidValue,
       remaining: round2(total - paidValue),
       per: last.originalAmount || last.amount,
+      // parcelas com valores diferentes (ajustadas à mão): a tela mostra a faixa em vez de "N× de"
+      perMin: Math.min(...list.map((t) => t.originalAmount || t.amount)),
+      perMax: Math.max(...list.map((t) => t.originalAmount || t.amount)),
       next: open[0] || null,
-      start: first.date,
+      start: installmentDue(first),
       end: installmentDue(last),
       discount: sum(list, (t) => (t.originalAmount ? t.originalAmount - t.amount : 0)),
       late: open.filter((t) => installmentDue(t) < today()).length,
@@ -633,49 +835,16 @@ export function knownPeople() {
 }
 
 /**
- * Registra o pagamento (ou recebimento) de uma parcela fora do cartão: valor efetivo, conta e data.
- * Se o valor for diferente do previsto (juros, desconto), o previsto fica guardado em `originalAmount`.
+ * Quitação antecipada fora do cartão (só quando pedida): as parcelas escolhidas viram pagas na data e o
+ * valor pago (com desconto, se houver) é distribuído entre elas na proporção do valor de cada uma. Cada parcela guarda o vencimento e o
+ * valor original, então pode ser estornada sozinha como qualquer baixa.
  */
-export function payInstallment(id, { amount, accountId, date = today() } = {}) {
-  const t = byId(S.transactions, id);
-  if (!t || t.cardId || t.prior) return null;
-  if (amount && Math.abs(amount - t.amount) > 0.004) {
-    if (!t.originalAmount) t.originalAmount = t.amount;
-    t.amount = round2(amount);
-  }
-  Object.assign(t, { paid: true, date, accountId: accountId || t.accountId });
-  save();
-  return t;
-}
-export function unpayInstallment(id) {
-  const t = byId(S.transactions, id);
-  if (!t || t.cardId || t.prior) return;
-  t.paid = false;
-  if (t.originalAmount) {
-    t.amount = t.originalAmount;
-    delete t.originalAmount;
-  }
-  save();
-}
-
-/** Marca como paga a próxima parcela em aberto de uma compra fora do cartão. */
-export function payNextInstallment(groupId, date = today()) {
-  const next = S.transactions
-    .filter((t) => t.groupId === groupId && t.installment && !t.cardId && !t.paid)
-    .sort((a, b) => a.installment.n - b.installment.n)[0];
-  if (!next) return null;
-  next.paid = true;
-  if (date < next.date) next.date = date;
-  save();
-  return next;
-}
-
-/**
- * Quitação antecipada fora do cartão: as parcelas em aberto viram pagas hoje e o valor pago
- * (com desconto, se houver) é distribuído entre elas, guardando o valor original.
- */
-export function settleInstallments(groupId, amountPaid, accountId, date = today()) {
-  const open = S.transactions.filter((t) => t.groupId === groupId && t.installment && !t.cardId && !t.paid).sort((a, b) => a.installment.n - b.installment.n);
+export function settleInstallments(groupId, amountPaid, accountId, date = today(), count = Infinity) {
+  // `count`: quantas parcelas em aberto, a partir da próxima, entram na quitação (padrão: todas)
+  const open = S.transactions
+    .filter((t) => t.groupId === groupId && t.installment && !t.cardId && !t.paid && !t.prior)
+    .sort((a, b) => a.installment.n - b.installment.n)
+    .slice(0, count);
   if (!open.length) return 0;
   const original = sum(open, (t) => t.amount);
   const ratio = original ? amountPaid / original : 1;
@@ -683,8 +852,9 @@ export function settleInstallments(groupId, amountPaid, accountId, date = today(
   open.forEach((t, i) => {
     const value = i === open.length - 1 ? left : round2(t.amount * ratio);
     left = round2(left - value);
-    if (Math.abs(value - t.amount) > 0.004) t.originalAmount = t.amount;
-    Object.assign(t, { amount: value, paid: true, date, accountId: accountId || t.accountId, note: [t.note, 'Quitação antecipada'].filter(Boolean).join(' · ') });
+    t.baixa = { note: t.note || '', amount: t.amount, original: t.originalAmount };
+    if (Math.abs(value - t.amount) > 0.004) t.originalAmount ||= t.amount;
+    Object.assign(t, { amount: value, paid: true, dueDate: dueOf(t), date, accountId: accountId || t.accountId, note: [t.note, 'Quitação antecipada'].filter(Boolean).join(' · ') });
   });
   save();
   return round2(original - amountPaid);

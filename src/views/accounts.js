@@ -3,8 +3,9 @@ import {
   S, save, account, card, accountBalance, ACCOUNT_TYPES, ACCOUNT_ICONS, SCOPES, COLORS, currentInvoice, invoiceItems, invoiceTotal,
   invoicePaid, invoiceStatus, invoiceDueDate, invoiceCloseDate, cardUsed, accountsIn, cardsIn, bestCard, daysToDue, anticipatable,
   anticipate, adjustBalanceWithTransaction, moveTransactions, invoiceBreakdown, futureInstallments, installmentGroups, installmentIn, category,
+  carryInvoiceRest, undoCarry, undoAnticipation,
 } from '../store.js';
-import { esc, icon, uid, parseMoney, moneyPlain, monthEnd, thisMonth, monthLabel, addMonths, shortDate, today, round2 } from '../util.js';
+import { esc, icon, uid, parseMoney, money, moneyPlain, monthEnd, thisMonth, monthLabel, addMonths, shortDate, today, round2 } from '../util.js';
 import { UI, $m, pageHead, scopeChips, progress, empty, on, rerender, openSheet, closeSheet, toast, confirmSheet, go, catBadge } from '../ui.js';
 import { txRow } from './transactions.js';
 import { openTxForm, openRefund } from '../form.js';
@@ -12,7 +13,7 @@ import { openTxForm, openRefund } from '../form.js';
 const colorPicker = (selected) =>
   `<div class="swatches">${COLORS.map((c) => `<label style="--c:${c}"><input type="radio" name="color" value="${c}" ${c === selected ? 'checked' : ''}><span></span></label>`).join('')}</div>`;
 const scopePicker = (selected = 'pf') =>
-  `<div class="seg two">${Object.entries(SCOPES).map(([k, l]) => `<label class="seg-btn ${k === selected ? 'on' : ''}"><input type="radio" name="scope" value="${k}" ${k === selected ? 'checked' : ''}>${l}</label>`).join('')}</div>`;
+  !S.settings.business ? '' : `<div class="field"><span>Uso</span><div class="seg two">${Object.entries(SCOPES).map(([k, l]) => `<label class="seg-btn ${k === selected ? 'on' : ''}"><input type="radio" name="scope" value="${k}" ${k === selected ? 'checked' : ''}>${l}</label>`).join('')}</div></div>`;
 const signed = (raw) => parseMoney(raw) * (String(raw).trim().startsWith('-') ? -1 : 1);
 
 function wireSeg(sheet) {
@@ -22,11 +23,13 @@ function wireSeg(sheet) {
 }
 
 // ---------- contas ----------
-const accountRow = (a) => `
+/** Selo para conta com saldo abaixo de zero. */
+export const negBadge = (v) => (v < -0.004 ? '<span class="tag-badge neg">negativa</span>' : '');
+const accountRow = (a, bal = accountBalance(a.id)) => `
   <li class="row"><button class="row linklike grow-row" data-action="open-statement" data-id="${a.id}" aria-label="Ver extrato de ${esc(a.name)}">
     <span class="cat-badge" style="--c:${a.color}">${icon(ACCOUNT_ICONS[a.type] || 'wallet', 18)}</span>
-    <span class="grow"><b>${esc(a.name)}</b><small>${ACCOUNT_TYPES[a.type] || 'Conta'} · ${SCOPES[a.scope || 'pf']}${a.archived ? ' · arquivada' : ''} · ver extrato</small></span>
-    <span class="num-col"><span class="num ${accountBalance(a.id) < 0 ? 'neg' : ''}">${$m(accountBalance(a.id))}</span><small>prev. ${$m(accountBalance(a.id, monthEnd(thisMonth())))}</small></span>
+    <span class="grow"><b>${esc(a.name)} ${negBadge(bal)}</b><small>${ACCOUNT_TYPES[a.type] || 'Conta'}${S.settings.business ? ` · ${SCOPES[a.scope || 'pf']}` : ''}${a.archived ? ' · arquivada' : ''} · ver extrato</small></span>
+    <span class="num-col"><span class="num ${bal < -0.004 ? 'neg' : ''}">${$m(bal)}</span><small>prev. ${$m(accountBalance(a.id, monthEnd(thisMonth())))}</small></span>
   </button><button class="icon-btn" data-action="account-form" data-id="${a.id}" aria-label="Editar ${esc(a.name)}">${icon('pencil', 16)}</button></li>`;
 
 export function renderAccounts() {
@@ -37,9 +40,9 @@ export function renderAccounts() {
   return `<section>
     ${pageHead('Contas', { back: '#/mais', right: `<button class="btn primary sm" data-action="account-form">${icon('plus', 16)} Nova</button>` })}
     ${scopeChips()}
-    <div class="summary-strip two"><div><small>Saldo atual</small><b>${$m(total)}</b></div><div><small>Previsto fim do mês</small><b>${$m(forecast)}</b></div></div>
-    <article class="card">${list.length ? `<ul class="list">${list.map(accountRow).join('')}</ul>` : empty('landmark', 'Nenhuma conta', 'Adicione conta corrente, poupança, carteira ou investimentos.')}</article>
-    ${archived.length ? `<details class="card"><summary class="card-head"><h2>Arquivadas (${archived.length})</h2></summary><ul class="list">${archived.map(accountRow).join('')}</ul></details>` : ''}
+    <div class="summary-strip two"><div><small>Saldo atual</small><b class="${total < -0.004 ? 'neg' : ''}">${$m(total)}</b></div><div><small>Previsto fim do mês</small><b class="${forecast < -0.004 ? 'neg' : ''}">${$m(forecast)}</b></div></div>
+    <article class="card">${list.length ? `<ul class="list">${list.map((a) => accountRow(a)).join('')}</ul>` : empty('landmark', 'Nenhuma conta', 'Adicione conta corrente, poupança, carteira ou investimentos.')}</article>
+    ${archived.length ? `<details class="card"><summary class="card-head"><h2>Arquivadas (${archived.length})</h2></summary><ul class="list">${archived.map((a) => accountRow(a)).join('')}</ul></details>` : ''}
   </section>`;
 }
 
@@ -50,7 +53,7 @@ function accountForm(a) {
     <h2 class="sheet-title">${isEdit ? 'Editar conta' : 'Nova conta'}</h2>
     <label class="field"><span>Nome</span><input name="name" required maxlength="40" value="${esc(a.name || '')}" placeholder="Ex.: Nubank, Itaú, Carteira" autofocus></label>
     <label class="field"><span>Tipo</span><select name="type">${Object.entries(ACCOUNT_TYPES).map(([k, l]) => `<option value="${k}" ${k === a.type ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-    <div class="field"><span>Uso</span>${scopePicker(a.scope)}</div>
+    ${scopePicker(a.scope)}
     <label class="amount-field"><span>Saldo inicial</span><div><em>R$</em><input name="initial" inputmode="decimal" value="${moneyPlain(a.initial)}"></div></label>
     ${isEdit ? `<p class="hint">Saldo atual: <b>${$m(accountBalance(a.id))}</b>. Para corrigir o saldo, use “Reajustar saldo”.</p>` : ''}
     <div class="field"><span>Cor</span>${colorPicker(a.color)}</div>
@@ -62,7 +65,7 @@ function accountForm(a) {
     onMount(sheet) {
       wireSeg(sheet);
       const f = sheet.querySelector('form');
-      f.addEventListener('submit', (e) => {
+      f.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (!f.name.value.trim()) {
           const er = f.querySelector('.form-error');
@@ -70,7 +73,22 @@ function accountForm(a) {
           er.hidden = false;
           return;
         }
-        const data = { name: f.name.value.trim(), type: f.type.value, scope: f.scope.value, initial: signed(f.initial.value), color: f.color.value, archived: !!f.archived?.checked };
+        const data = { name: f.name.value.trim(), type: f.type.value, scope: f.scope?.value || a.scope || 'pf', initial: signed(f.initial.value), color: f.color.value, archived: !!f.archived?.checked };
+        // arquivar conta com saldo: confirma antes, porque ela deixa de somar no saldo geral
+        const bal = isEdit && data.archived && !account(a.id)?.archived ? accountBalance(a.id) : 0;
+        if (Math.abs(bal) > 0.004) {
+          const ok = await confirmSheet({
+            title: `Arquivar ${data.name}?`,
+            text: `A conta ${data.name} tem ${money(bal)}. Ela sai das listas e do saldo geral (os lançamentos continuam no histórico e nos relatórios). Arquivar mesmo assim?`,
+            options: [{ label: 'Arquivar mesmo assim', value: 'yes', danger: true }],
+          });
+          // cancelou: volta ao formulário com o que já foi digitado, sem arquivar
+          if (!ok) return accountForm({ ...account(a.id), ...data, archived: false });
+          Object.assign(account(a.id), data);
+          save();
+          toast('Conta arquivada.');
+          return rerender();
+        }
         if (isEdit) Object.assign(account(a.id), data);
         else S.accounts.push({ id: uid(), ...data });
         save();
@@ -129,13 +147,35 @@ function accountForm(a) {
 const STATUS = { aberta: ['Aberta', 'st-open'], fechada: ['Fechada', 'st-closed'], parcial: ['Paga parcialmente', 'st-closed'], paga: ['Paga', 'st-paid'], vencida: ['Vencida', 'st-late'] };
 const dueText = (d) => (d > 1 ? `vence em ${d} dias` : d === 1 ? 'vence amanhã' : d === 0 ? 'vence hoje' : `venceu há ${-d} dia(s)`);
 
+// ---------- faturas fechadas ainda não pagas ----------
+const OWED = ['fechada', 'parcial', 'vencida'];
+/** Regra pura: das faturas informadas, as fechadas/vencidas/pagas em parte com saldo a pagar (mais antiga primeiro). */
+export const owedInvoices = (rows) => rows.filter((f) => OWED.includes(f.st) && f.rest > 0.004).sort((a, b) => a.ym.localeCompare(b.ym));
+/** As duas faturas anteriores à aberta que fecharam e ainda têm saldo a pagar. */
+export function unpaidClosed(c) {
+  const open = currentInvoice(c);
+  return owedInvoices([addMonths(open, -2), addMonths(open, -1)].map((ym) => ({
+    ym,
+    st: invoiceStatus(c, ym),
+    rest: round2(invoiceTotal(c.id, ym) - invoicePaid(c.id, ym)),
+    days: daysToDue(c, ym),
+  })));
+}
+/** Texto do aviso: "Fatura fechada · R$ x · vence em N dias" ou "Vencida há N dia(s) · R$ x". */
+export const unpaidText = (f) =>
+  `${f.days < 0 ? `Vencida há ${-f.days} dia(s) · ${$m(f.rest)}` : `Fatura fechada · ${$m(f.rest)} · ${dueText(f.days)}`} · ${monthLabel(f.ym, { short: true })}`;
+/** Fatura que a tela do cartão abre sem escolha: a fechada não paga mais antiga, senão a aberta. */
+const startInvoice = (c) => unpaidClosed(c)[0]?.ym || currentInvoice(c);
+
 function cardTile(c) {
   const inv = currentInvoice(c);
   const used = cardUsed(c.id);
   const inst = installmentGroups('all', { cardId: c.id }).filter((g) => !g.done);
   const future = futureInstallments(c.id, inv);
+  const owed = unpaidClosed(c);
   return `<a class="credit-card" href="#/cartao/${c.id}" style="--c:${c.color}">
     <div class="cc-top"><b>${esc(c.name)}</b>${icon('credit-card', 22)}</div>
+    ${owed.map((f) => `<span class="status ${f.days < 0 ? 'st-late' : 'st-closed'}" style="align-self:flex-start">${icon('triangle-alert', 12)} ${unpaidText(f)}</span>`).join('')}
     <div><small>Fatura atual · ${monthLabel(inv, { short: true })} · ${dueText(daysToDue(c, inv))}</small><p class="cc-v">${$m(invoiceTotal(c.id, inv))}</p></div>
     <div class="cc-foot"><span>Fecha dia ${c.closeDay}</span><span>Vence dia ${c.dueDay}</span></div>
     ${progress(used, c.limit)}<small>Disponível ${$m(c.limit - used)} de ${$m(c.limit)}</small>
@@ -167,7 +207,7 @@ function cardForm(c) {
     <div class="row2"><label class="field"><span>Dia de fechamento</span><select name="closeDay">${days(c.closeDay)}</select></label>
       <label class="field"><span>Dia de vencimento</span><select name="dueDay">${days(c.dueDay)}</select></label></div>
     <label class="field"><span>Conta de pagamento</span><select name="accountId">${S.accounts.map((a) => `<option value="${a.id}" ${a.id === c.accountId ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
-    <div class="field"><span>Uso</span>${scopePicker(c.scope)}</div>
+    ${scopePicker(c.scope)}
     <div class="field"><span>Cor</span>${colorPicker(c.color)}</div>
     ${isEdit ? `<label class="switch-row"><span>Arquivar cartão</span><input type="checkbox" role="switch" name="archived" ${c.archived ? 'checked' : ''}></label>` : ''}
     <p class="form-error" role="alert" hidden></p>
@@ -188,7 +228,7 @@ function cardForm(c) {
           err.hidden = false;
           return;
         }
-        const data = { name: f.name.value.trim(), limit: parseMoney(f.limit.value), closeDay: Number(f.closeDay.value), dueDay: Number(f.dueDay.value), accountId: f.accountId.value, scope: f.scope.value, color: f.color.value, archived: !!f.archived?.checked };
+        const data = { name: f.name.value.trim(), limit: parseMoney(f.limit.value), closeDay: Number(f.closeDay.value), dueDay: Number(f.dueDay.value), accountId: f.accountId.value, scope: f.scope?.value || c.scope || 'pf', color: f.color.value, archived: !!f.archived?.checked };
         if (isEdit) Object.assign(card(c.id), data);
         else S.cards.push({ id: uid(), ...data });
         save();
@@ -216,24 +256,50 @@ function cardInstRow(g, ym) {
   const left = after.reduce((a, t) => a + t.amount, 0) + (g.missingValue || 0);
   const nextInv = after[0]?.invoice;
   const afterCount = after.length + (g.missing || 0);
+  // parcelas de valores diferentes: mostra a faixa
+  const range = g.perMax - g.perMin > 0.01 ? ` · ${g.n} parcelas de ${$m(g.perMin)} a ${$m(g.perMax)}` : '';
   return `<li><button class="row col linklike inst" data-action="inst-open" data-id="${g.groupId}">
     <div class="row-in">${catBadge(category(g.categoryId), 36)}
-      <span class="grow"><b>${esc(g.desc)}</b><small>Parcela <b>${here.installment.n}/${g.n}</b>${afterCount ? ` · faltam ${afterCount} (${$m(left)})` : ' · última parcela'}${nextInv ? ` · próxima em ${monthLabel(nextInv, { short: true })}` : ''}</small></span>
+      <span class="grow"><b>${esc(g.desc)}</b><small>Parcela <b>${here.installment.n}/${g.n}</b>${range}${afterCount ? ` · faltam ${afterCount} (${$m(left)})` : ' · última parcela'}${nextInv ? ` · próxima em ${monthLabel(nextInv, { short: true })}` : ''}</small></span>
       <span class="num">${$m(here.amount)}</span></div>
     ${progress(g.paidValue, g.total, { warn: 2 })}
   </button></li>`;
 }
 
+// ---------- rotativo e antecipação: itens ligados que se desfazem juntos ----------
+const ANT_BADGE = '<span class="tag-badge">antecipada</span>';
+/** Linha da fatura: rotativo e desconto da antecipação abrem a explicação (não se excluem pela metade). */
+function invRow(t) {
+  let html = txRow(t, { showDate: true });
+  if (t.anticipatedFrom) html = html.replace(ANT_BADGE, `<span class="tag-badge">antecipada de ${monthLabel(t.anticipatedFrom, { short: true })}</span>`);
+  const carry = t.carryId && t.type === 'invoiceAdjust';
+  const disc = t.anticipationId && t.type === 'refund';
+  if (carry || disc) html = html.replace(`data-action="edit-tx" data-id="${t.id}"`, `data-action="${carry ? 'carry-info' : 'anticipation-info'}" data-id="${t.id}"`);
+  const link = carry
+    ? `${icon('arrow-up-right', 14)} ${t.delta < 0 ? `Rotativo: saldo enviado para a fatura de ${monthLabel(addMonths(t.invoice, 1), { short: true })}` : `Rotativo: saldo vindo da fatura de ${monthLabel(addMonths(t.invoice, -1), { short: true })}`}`
+    : t.carryId ? `${icon('arrow-up-right', 14)} Juros do rotativo`
+    : t.anticipationId && t.anticipatedFrom ? `${icon('calendar-clock', 14)} Antecipada da fatura de ${monthLabel(t.anticipatedFrom, { short: true })}`
+    : disc ? `${icon('calendar-clock', 14)} Desconto da antecipação` : '';
+  if (!link) return html;
+  const btn = t.carryId
+    ? `<button class="chip" data-action="undo-carry" data-id="${t.carryId}">${icon('rotate-ccw', 14)} Desfazer rotativo</button>`
+    : `<button class="chip" data-action="undo-anticipation" data-id="${t.anticipationId}">${icon('rotate-ccw', 14)} Desfazer antecipação</button>`;
+  return `${html}<li class="inv-link"><span>${link}</span>${btn}</li>`;
+}
+
 export function renderCardDetail(id) {
   const c = card(id);
   if (!c) return `<section>${pageHead('Cartão', { back: '#/cartoes' })}${empty('credit-card', 'Cartão não encontrado', '')}</section>`;
-  const ym = UI.invoice[id] || currentInvoice(c);
+  const ym = UI.invoice[id] || startInvoice(c);
   const allItems = invoiceItems(id, ym);
   const filter = UI.invItems || 'all';
   const items = allItems.filter((t) => filter === 'all' || (filter === 'inst' ? t.installment : !t.installment));
   const total = invoiceTotal(id, ym);
   const paid = invoicePaid(id, ym);
-  const st = invoiceStatus(c, ym);
+  // saldo levado ao rotativo sem nenhum pagamento deixa o total em zero: a fatura está quitada
+  const carried = allItems.some((t) => t.carryId && t.type === 'invoiceAdjust' && t.delta < 0);
+  const st = carried && total - paid <= 0.004 ? 'paga' : invoiceStatus(c, ym);
+  const canCarry = OWED.includes(st) && total - paid > 0.004;
   const used = cardUsed(id);
   const d = daysToDue(c, ym);
   const bd = invoiceBreakdown(id, ym);
@@ -266,10 +332,11 @@ export function renderCardDetail(id) {
       <button class="btn ghost" data-action="new-card-expense" data-id="${id}">${icon('plus', 18)} Despesa</button>
       <button class="btn ghost" data-action="new-card-inst" data-id="${id}">${icon('layers', 18)} Parcelada</button>
     </div>
+    ${canCarry ? `<button class="btn ghost carry-btn" data-action="card-carry" data-id="${id}">${icon('arrow-up-right', 18)} Levar o restante para a próxima fatura</button>` : ''}
     <div class="chips scroll">
       <button class="chip" data-action="card-refund" data-id="${id}">${icon('rotate-ccw', 14)} Lançar estorno</button>
       <button class="chip" data-action="card-adjust" data-id="${id}">${icon('scale', 14)} Ajustar fatura</button>
-      <button class="chip" data-action="card-anticipate" data-id="${id}">${icon('calendar-clock', 14)} Antecipar parcelas</button>
+      <button class="chip" data-action="card-anticipate" data-id="${id}">${icon('calendar-clock', 14)} ${ym < currentInvoice(c) ? `Antecipar parcelas para ${monthLabel(currentInvoice(c), { short: true })}` : 'Antecipar parcelas'}</button>
     </div>
     <article class="card">
       <header class="card-head"><h2>Parcelas desta fatura</h2><span class="muted small">${groups.length} parcela(s) · ${$m(bd.installments)}</span></header>
@@ -280,7 +347,7 @@ export function renderCardDetail(id) {
     <article class="card">
       <header class="card-head"><h2>Lançamentos</h2><span class="muted small">${items.length} item(ns)</span></header>
       <div class="chips small">${[['all', 'Todos'], ['single', 'À vista'], ['inst', 'Parcelas']].map(([v, l]) => `<button class="chip ${filter === v ? 'on' : ''}" data-action="inv-items" data-v="${v}">${l}</button>`).join('')}</div>
-      ${items.length ? `<ul class="list">${items.map((t) => txRow(t, { showDate: true })).join('')}</ul>` : empty('receipt', 'Fatura sem lançamentos', 'As compras deste período aparecerão aqui.')}
+      ${items.length ? `<ul class="list">${items.map(invRow).join('')}</ul>` : empty('receipt', 'Fatura sem lançamentos', 'As compras deste período aparecerão aqui.')}
     </article>
     ${payments.length ? `<article class="card"><header class="card-head"><h2>Pagamentos</h2></header><ul class="list">${payments.map((p) => `
       <li class="row">${icon('circle-check', 20, 'pos')}<span class="grow"><b>${shortDate(p.date)}</b><small>${esc(account(p.accountId)?.name || '')}</small></span><span class="num">${$m(p.amount)}</span>
@@ -288,7 +355,7 @@ export function renderCardDetail(id) {
   </section>`;
 }
 
-const invoiceOf = (c) => UI.invoice[c.id] || currentInvoice(c);
+const invoiceOf = (c) => UI.invoice[c.id] || startInvoice(c);
 
 on({
   'account-form': (el) => accountForm(el.dataset.id ? account(el.dataset.id) : null),
@@ -312,7 +379,7 @@ on({
   'new-card-expense': (el) => openTxForm('card', null, { cardId: el.dataset.id }),
   'new-card-inst': (el) => openTxForm('card', null, { cardId: el.dataset.id, repeat: 'installments', times: 10 }),
   'inv-items': (el) => ((UI.invItems = el.dataset.v), rerender()),
-  'card-refund': (el) => openRefund(el.dataset.id),
+  'card-refund': (el) => openRefund(el.dataset.id, { invoice: UI.invoice[el.dataset.id] }),
   'card-adjust': (el) => {
     const c = card(el.dataset.id);
     const ym = invoiceOf(c);
@@ -338,12 +405,19 @@ on({
   },
   'card-anticipate': (el) => {
     const c = card(el.dataset.id);
-    const target = invoiceOf(c);
+    // fatura já fechada (ou paga) não recebe parcelas: o destino passa a ser a fatura aberta
+    const viewed = invoiceOf(c);
+    const open = currentInvoice(c);
+    const moved = viewed < open;
+    const target = moved ? open : viewed;
     const list = anticipatable(c.id, target);
-    if (!list.length) return toast('Nenhuma parcela futura para antecipar nesta fatura.');
+    if (!list.length) return toast(`Nenhuma parcela futura para antecipar na fatura de ${monthLabel(target)}.`);
     openSheet(`<form class="tx-form"><h2 class="sheet-title">${icon('calendar-clock', 20)} Antecipar parcelas</h2>
-      <p class="muted small">As parcelas marcadas entram na fatura de <b>${monthLabel(target)}</b>. Atenção: depois de feita, a antecipação não pode ser desfeita.</p>
+      ${moved ? `<p class="hint">${icon('info', 14)} A fatura de ${monthLabel(viewed)} já fechou. As parcelas serão antecipadas para a fatura aberta de <b>${monthLabel(target)}</b>.</p>` : ''}
+      <p class="muted small">As parcelas marcadas entram na fatura de <b>${monthLabel(target)}</b>. Se precisar, dá para desfazer depois na própria fatura.</p>
       <ul class="list">${list.map((t) => `<li><label class="row"><input type="checkbox" name="ids" value="${t.id}"><span class="grow"><b>${esc(t.desc || 'Parcela')}</b><small>Parcela ${t.installment.n}/${t.installment.total} · fatura de ${monthLabel(t.invoice, { short: true })}</small></span><span class="num">${$m(t.amount)}</span></label></li>`).join('')}</ul>
+      <label class="amount-field"><span>Desconto da antecipação <small class="muted">(opcional)</small></span><div><em>R$</em><input name="discount" inputmode="decimal" placeholder="0,00"></div></label>
+      <p class="hint">Se o banco deu desconto por antecipar, informe o valor: ele entra como estorno na fatura de ${monthLabel(target, { short: true })}.</p>
       <div class="form-actions"><button class="btn primary">${icon('check', 18)} Antecipar selecionadas</button></div></form>`, {
       onMount(sheet) {
         const f = sheet.querySelector('form');
@@ -351,9 +425,12 @@ on({
           e.preventDefault();
           const ids = [...f.querySelectorAll('[name=ids]:checked')].map((x) => x.value);
           if (!ids.length) return toast('Selecione ao menos uma parcela.');
-          anticipate(ids, target);
+          // o store devolve a fatura realmente usada: a tela passa a mostrá-la
+          const discount = parseMoney(f.discount.value);
+          const used = anticipate(ids, target, { discount });
+          UI.invoice[c.id] = used;
           closeSheet();
-          toast(`${ids.length} parcela(s) antecipada(s).`);
+          toast(`${ids.length} parcela(s) antecipada(s) para a fatura de ${monthLabel(used)}${discount > 0.004 ? `, com desconto de ${money(discount)}` : ''}.`);
           rerender();
         });
       },
@@ -376,6 +453,7 @@ on({
           const amount = parseMoney(f.amount.value);
           if (!amount) return;
           S.transactions.push({ id: uid(), type: 'payment', amount, cardId: c.id, invoice: ym, accountId: f.accountId.value, date: f.date.value || today(), paid: true, desc: `Fatura ${c.name}` });
+          UI.invoice[c.id] = ym; // fica na fatura paga, sem pular para a próxima
           save();
           closeSheet();
           toast(amount < due - 0.004 ? 'Pagamento parcial registrado.' : 'Fatura paga.');
@@ -384,8 +462,101 @@ on({
       },
     });
   },
+  'card-carry': (el) => {
+    const c = card(el.dataset.id);
+    const ym = invoiceOf(c);
+    const rest = round2(invoiceTotal(c.id, ym) - invoicePaid(c.id, ym));
+    if (rest <= 0.004) return toast('Esta fatura não tem saldo a pagar.');
+    const next = addMonths(ym, 1);
+    openSheet(`<form class="tx-form"><h2 class="sheet-title">${icon('arrow-up-right', 20)} Levar o restante para a próxima fatura</h2>
+      <div class="summary-strip two"><div><small>Falta pagar em ${monthLabel(ym, { short: true })}</small><b>${$m(rest)}</b></div><div><small>Vai para a fatura de</small><b>${monthLabel(next, { short: true })}</b></div></div>
+      <p class="muted small">É o crédito rotativo: o valor que você não pagou sai desta fatura (que fica quitada) e entra na fatura de ${monthLabel(next)}. O banco cobra juros e encargos sobre ele.</p>
+      <label class="amount-field"><span>Juros e encargos (veja na fatura do banco) <small class="muted">(opcional)</small></span><div><em>R$</em><input name="interest" inputmode="decimal" placeholder="0,00"></div></label>
+      <p class="hint">Os juros entram na fatura de ${monthLabel(next, { short: true })} como despesa “Juros e encargos do rotativo”. Dá para desfazer depois na própria fatura.</p>
+      <div class="form-actions"><button class="btn primary">${icon('check', 18)} Levar ${$m(rest)} para ${monthLabel(next, { short: true })}</button></div></form>`, {
+      onMount(sheet) {
+        const f = sheet.querySelector('form');
+        f.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const interest = parseMoney(f.interest.value);
+          const r = carryInvoiceRest(c.id, ym, { interest });
+          closeSheet();
+          if (!r) return toast('Esta fatura não tem saldo a pagar.');
+          UI.invoice[c.id] = ym;
+          toast(`${money(r.rest)} levado para a fatura de ${monthLabel(r.next)}${interest > 0.004 ? ` com ${money(interest)} de juros` : ''}.`);
+          rerender();
+        });
+      },
+    });
+  },
+  'carry-info': async (el) => {
+    const t = S.transactions.find((x) => x.id === el.dataset.id);
+    if (!t) return;
+    const out = t.delta < 0;
+    const ok = await confirmSheet({
+      title: `${out ? 'Saldo levado para a próxima fatura' : 'Saldo da fatura anterior (rotativo)'} · ${money(Math.abs(t.delta))}`,
+      text: `${out ? `O que faltava pagar foi para a fatura de ${monthLabel(addMonths(t.invoice, 1))}.` : `O que faltou pagar na fatura de ${monthLabel(addMonths(t.invoice, -1))} veio para esta.`} Para mudar, desfaça o rotativo: os dois lados e os juros saem juntos.`,
+      options: [{ label: 'Desfazer rotativo', value: 'yes', danger: true }],
+    });
+    if (!ok) return;
+    undoCarry(t.carryId);
+    toast('Rotativo desfeito.');
+    rerender();
+  },
+  'undo-carry': async (el) => {
+    const list = S.transactions.filter((t) => t.carryId === el.dataset.id);
+    const out = list.find((t) => t.type === 'invoiceAdjust' && t.delta < 0);
+    if (!out) return;
+    const interest = list.find((t) => t.type === 'expense');
+    const ok = await confirmSheet({
+      title: 'Desfazer rotativo?',
+      text: `${money(out.amount)} voltam para a fatura de ${monthLabel(out.invoice)}${interest ? ` e os juros de ${money(interest.amount)} saem da fatura de ${monthLabel(interest.invoice)}` : ''}.`,
+      options: [{ label: 'Desfazer rotativo', value: 'yes', danger: true }],
+    });
+    if (!ok) return;
+    undoCarry(el.dataset.id);
+    toast('Rotativo desfeito.');
+    rerender();
+  },
+  'anticipation-info': async (el) => {
+    const t = S.transactions.find((x) => x.id === el.dataset.id);
+    if (!t) return;
+    const choice = await confirmSheet({
+      title: `Desconto da antecipação · ${money(t.amount)}`,
+      text: 'Desconto lançado ao antecipar parcelas. Desfazer a antecipação devolve as parcelas às faturas de origem e tira o desconto.',
+      options: [{ label: 'Desfazer antecipação', value: 'undo', danger: true }, { label: 'Excluir só o desconto', value: 'del', danger: true }],
+    });
+    if (!choice) return;
+    if (choice === 'undo') undoAnticipation(t.anticipationId);
+    else {
+      S.transactions = S.transactions.filter((x) => x.id !== t.id);
+      save();
+    }
+    toast(choice === 'undo' ? 'Antecipação desfeita.' : 'Desconto excluído.');
+    rerender();
+  },
+  'undo-anticipation': async (el) => {
+    const id = el.dataset.id;
+    const parts = S.transactions.filter((t) => t.anticipationId === id && t.type !== 'refund');
+    const disc = S.transactions.find((t) => t.anticipationId === id && t.type === 'refund');
+    const from = [...new Set(parts.map((t) => t.anticipatedFrom).filter(Boolean))].sort().map((ym) => monthLabel(ym, { short: true }));
+    const ok = await confirmSheet({
+      title: 'Desfazer antecipação?',
+      text: `${parts.length} parcela(s) voltam para a(s) fatura(s) de ${from.join(', ')}${disc ? ` e o desconto de ${money(disc.amount)} sai` : ''}.`,
+      options: [{ label: 'Desfazer antecipação', value: 'yes', danger: true }],
+    });
+    if (!ok) return;
+    const n = undoAnticipation(id);
+    toast(`${n} parcela(s) devolvida(s) à fatura de origem.`);
+    rerender();
+  },
   'del-card-item': async (el) => {
-    if (!(await confirmSheet({ title: 'Excluir este lançamento da fatura?', options: [{ label: 'Excluir', value: 'yes', danger: true }] }))) return;
+    const p = S.transactions.find((t) => t.id === el.dataset.id);
+    if (!p) return;
+    const what = p.type === 'payment' ? `pagamento de ${money(p.amount)} feito em ${shortDate(p.date)}` : `lançamento de ${money(p.amount)} de ${shortDate(p.date)}`;
+    const acc = account(p.accountId)?.name;
+    const text = p.type === 'payment' ? `O valor volta ao saldo ${acc ? `da conta ${acc}` : 'da conta'} e fica de novo em aberto na fatura de ${monthLabel(p.invoice)}.` : '';
+    if (!(await confirmSheet({ title: `Excluir o ${what}?`, text, options: [{ label: 'Excluir', value: 'yes', danger: true }] }))) return;
     S.transactions = S.transactions.filter((t) => t.id !== el.dataset.id);
     save();
     rerender();

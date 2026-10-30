@@ -1,4 +1,4 @@
-﻿/* Ruffino Finanças — sistema "Executive Sovereign" da Lilian Ruffino Consultoria:
+/* Ruffino Finanças — sistema "Executive Sovereign" da Lilian Ruffino Consultoria:
    grafite institucional + dourado polido, Montserrat nos títulos e Plus Jakarta Sans no texto. */
 @font-face{font-family:"Montserrat";font-weight:600;font-display:swap;src:url("./fonts/montserrat-latin-600-normal.woff2") format("woff2")}
 @font-face{font-family:"Montserrat";font-weight:700;font-display:swap;src:url("./fonts/montserrat-latin-700-normal.woff2") format("woff2")}
@@ -62,9 +62,10 @@ p>.ic,.hint .ic{display:inline-block;vertical-align:-2px;margin-right:4px}
 .view>section{display:flex;flex-direction:column;gap:14px;animation:fade .25s var(--ease)}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .side{display:none}
-.tabbar{position:fixed;inset:auto 0 0 0;z-index:30;height:calc(var(--tabbar-h) + var(--safe-b));padding:0 6px var(--safe-b);display:grid;grid-template-columns:repeat(5,1fr);align-items:center;
+.tabbar{position:fixed;inset:auto 0 0 0;z-index:30;height:calc(var(--tabbar-h) + var(--safe-b));padding:0 2px var(--safe-b);display:grid;grid-template-columns:1fr 1fr 64px 1fr 1fr;align-items:center;
   background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--line)}
-.tabbar a{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;font-weight:600;color:var(--meta);padding:8px 0}
+.tabbar a{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;font-weight:600;color:var(--meta);padding:8px 0;min-width:0}
+.tabbar a span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tabbar a.on{color:var(--accent)}
 .fab{justify-self:center;width:56px;height:56px;border-radius:50%;display:grid;place-items:center;background:var(--grad-gold);color:#0F1012;box-shadow:0 8px 20px -6px rgba(197,160,89,.6);transform:translateY(-14px);transition:transform .2s var(--ease)}
 .fab:active{transform:translateY(-14px) scale(.94)}
@@ -452,3 +453,178 @@ label.chip{cursor:pointer}
 .day-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .day-bal{font-size:11.5px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--muted);font-variant-numeric:tabular-nums}
 li.row>.grow-row{flex:1;min-width:0;padding:0}
+
+/* ---------- calendário: marcadores das contas ---------- */
+.cal-mk{display:flex;gap:3px;align-items:center;justify-content:center;flex-wrap:wrap;min-height:10px;margin-top:auto}
+.mk{display:inline-block;width:7px;height:7px;border-radius:50%;font-style:normal;flex:none}
+.mk.pay{background:var(--neg)}.mk.rec{background:var(--pos)}
+.mk.late{background:var(--warn);border-radius:2px;transform:rotate(45deg);outline:1px solid var(--neg)}
+.mk.done{width:auto;height:auto;background:none;border-radius:0;color:var(--meta);font-size:9.5px;font-weight:700;line-height:1}
+.cal-cell.has-late{border-color:color-mix(in srgb,var(--neg) 55%,transparent)}
+.cal.compact .cal-cell{min-height:40px;padding:4px 2px}
+.cal.compact .cal-cell b{font-size:12px}
+.cal .legend-inline{align-items:center}
+.cal .legend-inline .mk{margin-left:6px}
+.cal .legend-inline .sep{flex-basis:100%;height:0}
+.cal-tip{margin-top:10px}
+
+/* ---------- a pagar e receber ---------- */
+.summary-strip.four{grid-template-columns:1fr 1fr}
+.pr-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.pr-view{grid-template-columns:repeat(3,minmax(0,1fr))}
+.pr-view .seg-btn{flex-direction:row;justify-content:center;gap:6px;padding:7px 6px;font-size:13px;min-width:0}
+.pr-view .seg-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr-side .seg-btn{font-size:14px}
+.pr-filters{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.field.compact{flex:1 1 160px;max-width:240px}
+.field.compact select{min-height:40px;padding:6px 10px;font-size:14px}
+.inst-schedule{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--surface-2)}
+.inst-schedule summary{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer}
+.inst-schedule[open] summary{margin-bottom:10px}
+.inst-rows{display:flex;flex-direction:column;gap:6px;max-height:40dvh;overflow:auto}
+.inst-row{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(0,110px);gap:8px;align-items:center}
+.inst-row input{min-height:40px;padding:6px 10px;border-radius:10px;border:1px solid var(--line-input);background:var(--surface);color:var(--ink);font-size:14px;width:100%;min-width:0}
+.pr-item .row{padding:8px 0 4px}
+.pr-item .grow small{white-space:normal}
+.pr-act{display:flex;justify-content:flex-end;padding:0 0 8px}
+.pr-st{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--surface-3);color:var(--muted)}
+.pr-st.late{background:color-mix(in srgb,var(--neg) 16%,transparent);color:var(--neg)}
+.pr-st.today{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.pr-st.done{background:color-mix(in srgb,var(--pos) 16%,transparent);color:var(--pos)}
+.pr-item.st-baixada .grow b{color:var(--meta);text-decoration:line-through}
+.pr-warn{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:10px;font-size:13px;background:color-mix(in srgb,var(--warn) 14%,transparent);border:1px solid color-mix(in srgb,var(--warn) 40%,transparent)}
+.pr-warn .ic{color:var(--warn)}
+.pr-warn span{flex:1 1 200px;min-width:0}
+.pr-new .btn{flex:1 1 140px}
+.day-sheet{display:flex;flex-direction:column;gap:12px}
+
+/* ---------- conciliação na importação ---------- */
+.imp-match{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 0 10px 30px}
+.imp-match .mini-select{max-width:100%;flex:1 1 220px;min-width:0}
+.tag-badge.ok{background:color-mix(in srgb,var(--pos) 16%,transparent);color:var(--pos)}
+
+/* rodada 3 · relatórios e planejamento */
+.nowrap{white-space:nowrap}
+.print-only{display:none}
+.rep-period-line{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:-4px}
+.rep-period-line b{color:var(--ink)}
+.rep-cat{gap:10px;border-radius:var(--r-sm)}
+.rep-cat:hover,.dre-link:hover td{background:var(--surface-2)}
+.rep-cat .grow{font-weight:600}
+.dre-link{cursor:pointer}
+.dre-btn{display:inline-flex;align-items:center;gap:4px;text-align:left;font:inherit;color:inherit}
+.rep-drill{display:flex;flex-direction:column;gap:8px}
+.rep-drill .sheet-title .dot-c{width:14px;height:14px}
+.rep-drill-total{display:flex;justify-content:space-between;align-items:baseline;padding:10px 12px;border-radius:10px;background:var(--surface-2);font-weight:600}
+.rep-drill-total b{font-family:var(--display);font-size:18px;font-variant-numeric:tabular-nums}
+.wa-preview{white-space:pre-wrap;word-break:break-word;font-family:var(--sans);font-size:13px;line-height:1.5;margin:10px 0 14px;padding:12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);max-height:40dvh;overflow:auto}
+/* planejamento: valores não cortam em telas estreitas */
+.grow small.plan-amt{white-space:normal;overflow:visible;text-overflow:clip}
+.plan-left{flex:none;max-width:45%}
+.plan-left small{font-size:11.5px}
+.plan-hero .hero-split{flex-wrap:wrap;row-gap:4px}
+.plan-hero .hero-split>div{flex:1 1 auto;min-width:0}
+@media (max-width:400px){.plan-hero .hero-v.sm{font-size:20px}}
+@media print{
+  :root,[data-theme],[data-theme=dark]{--bg:#fff;--surface:#fff;--surface-2:#f4f5f8;--surface-3:#eceef3;--ink:#111;--muted:#333;--meta:#555;--line:#ccc;--line-input:#bbb;--accent:#775A19;--pos:#1B6B3A;--neg:#BA1A1A;--neu:#4A5E7A;--track:#e7eaf0;--sh:none;color-scheme:light}
+  body{background:#fff!important;color:#111;font-size:12pt}
+  .side,.tabbar,.fab,#sheet-root,#toast,.month-switch,.chips,.no-print,.reports .toolbar{display:none!important}
+  .print-only{display:block!important}
+  .view{max-width:none;padding:0!important}
+  .view>section{animation:none;gap:10px}
+  .rep-print-head{font-size:10pt;color:#555;border-bottom:1px solid #ccc;padding-bottom:6px}
+  .reports .grid{display:block}
+  .reports .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none;border:1px solid #ccc;margin-bottom:12px}
+  .reports .rep-cat:hover,.reports .dre-link:hover td{background:none}
+  .reports .hint{color:#444}
+  .chart,.donut{max-width:520px;margin:0 auto}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+
+/* rodada 3 · lançamento e navegação */
+/* barra inferior com 6 itens: Início, Transações, [+], A pagar, Planejar, Mais (cabe em 360px) */
+.tabbar{grid-template-columns:repeat(2,minmax(0,1fr)) 56px repeat(3,minmax(0,1fr));padding-inline:0}
+.tabbar a{min-height:48px;justify-content:center;padding:6px 0;font-size:10.5px;letter-spacing:-.015em}
+.tabbar .fab{width:54px;height:54px}
+/* rodapé da lateral: dourado da marca sobre o grafite (contraste ≥ 4,5:1) */
+.side-foot{color:var(--gold)}
+/* alcance da edição de série e botões do formulário */
+[data-scope] .seg-btn{position:relative;font-size:13px;line-height:1.25;padding:9px 4px}
+.seg-btn:has(input:focus-visible){outline:2px solid var(--gold);outline-offset:1px}
+.form-actions:has([data-duplicate]){flex-wrap:wrap}
+.form-actions [data-delete],.form-actions [data-duplicate]{flex:1 1 auto;padding:0 12px}
+.form-actions:has([data-duplicate]) .btn.primary{flex:1 1 auto}
+
+/* rodada 3 · transações e tags */
+/* resultado da busca/filtro com a soma */
+.tx-result b{font-variant-numeric:tabular-nums;white-space:nowrap}
+/* tags: valores quebram linha no celular em vez de serem cortados */
+.tag-row small.tag-sums{white-space:normal;overflow:visible;display:flex;flex-wrap:wrap;column-gap:4px}
+.tag-row small.tag-sums span{white-space:nowrap}
+/* modo viagem: ligado (desligar) e desligado (ativar) */
+.travel-line .grow-text{flex:1;min-width:0}
+.travel-line .btn.sm{min-height:32px;padding:0 10px}
+.travel-off-line{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;padding:10px 12px;border:1px dashed var(--line-input);border-radius:10px}
+.travel-off-line>span{flex:1 1 200px;min-width:0}
+.travel-off-line .ic{display:inline-block;vertical-align:-2px}
+
+/* rodada 3 · contas, início, baixa, categorias, calendário */
+.cal .cal-legend{gap:6px 12px;flex-wrap:wrap;margin-top:10px}
+.cal-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.cal .cal-legend .mk{margin-left:0}
+.cal .cal-tip{margin-top:6px}
+.pr-fee{display:inline-block;font-size:11px;font-weight:700}
+.hb-list{list-style:none;margin:6px 0 0;padding:0}
+.hb-row{display:flex;align-items:center;gap:6px;border-top:1px solid var(--line);padding:4px 0}
+.hb-row:first-child{border-top:0}
+.hb-row .switch-row{flex:1;min-width:0}
+.hb-row .switch-row>span{min-width:0;overflow-wrap:anywhere}
+.hb-move{display:flex;gap:2px;flex:none}
+.hb-move .icon-btn{width:40px;height:40px;color:var(--ink);border:1px solid var(--line)}
+.hb-move .icon-btn:disabled{opacity:.3;cursor:default}
+
+/* rodada 4 · a pagar e receber */
+/* filtros: no desktop tudo aberto; no celular, bloco recolhível com o seletor de mês sempre visível */
+.pr-fbox{display:flex;flex-direction:column;gap:14px}
+.pr-fmore{display:flex;flex-direction:column;gap:14px}
+.pr-ftoggle{display:none}
+.pr-ftoggle .pr-fchev{transition:transform .2s var(--ease)}
+.pr-fbox.open .pr-fchev{transform:rotate(180deg)}
+.pr-view .lbl-short{display:none}
+.pr-note{font-weight:500}
+@media (max-width:520px){
+  .pr-fbox{gap:10px}
+  .pr-fmore{gap:10px}
+  .pr-filters{align-items:center;gap:8px}
+  .pr-ftoggle{display:inline-flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0;white-space:nowrap}
+  .pr-filters .pr-period{order:3;flex:1 1 100%;max-width:none}
+  .pr-fbox:not(.open) .pr-period,.pr-fbox:not(.open) .pr-fmore{display:none}
+  .pr-filters .month-switch{min-width:0}
+  .pr-view .seg-btn{gap:5px;padding:8px 4px;font-size:12.5px}
+  .pr-view .lbl-full{display:none}
+  .pr-view .lbl-short{display:inline}
+}
+/* quitação antecipada: parcelas escolhidas */
+.inst-pick{margin:4px 0 10px}
+.inst-pick p{margin:0 0 6px}
+.inst-pick-list{list-style:none;margin:0;padding:0;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.inst-pick-list li{display:flex;align-items:center;gap:10px;padding:6px 10px;border-top:1px solid var(--line);font-size:13px}
+.inst-pick-list li:first-child{border-top:0}
+.inst-pick-list li span:nth-child(2){flex:1;min-width:0;color:var(--muted)}
+.inst-pick-list b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.inst-pick-list .inst-n{width:24px;height:24px;font-size:11.5px}
+
+/* rodada 4 · cartões e contas */
+.tag-badge.neg{background:color-mix(in srgb,var(--neg) 16%,transparent);color:var(--neg)}
+.hero .hero-v.neg,.hero .hero-sub strong.neg{color:#F2726F}
+.summary-strip b.neg{color:var(--neg)}
+.list>li.inv-link{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;border-top:0;padding:0 0 10px 50px;font-size:12.5px;color:var(--meta)}
+.inv-link>span{display:inline-flex;align-items:center;gap:5px;flex:1 1 160px;min-width:0}
+.inv-link .chip{flex:none}
+.carry-btn{width:100%;justify-content:center;border-color:color-mix(in srgb,var(--warn) 45%,var(--line));color:var(--warn)}
+@media (max-width:400px){.list>li.inv-link{padding-left:0}}
+
+/* rodada 4 · importação */
+.imp-sugg{display:inline-block;margin-left:6px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--gold-tint);vertical-align:1px}
+.imp-warn{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:9px 12px;border-radius:10px;font-size:13px;line-height:1.4;color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent)}
+.imp-warn .ic{flex:none;margin-top:1px}

@@ -1,9 +1,9 @@
 // Formulário de lançamento: despesa, receita, transferência e despesa no cartão.
 import {
   S, save, byId, category, categoriesOf, NEUTRAL_TYPES, subcategoriesOf, addTransaction, updateTransaction, deleteTransaction, descriptionsIndex, allTags,
-  invoiceFor, card, SCOPES, averageForDescription, rootId, knownPeople,
+  invoiceFor, invoiceDueDate, card, SCOPES, averageForDescription, rootId, knownPeople, account, accountBalance, accountEffect,
 } from './store.js';
-import { esc, icon, today, isoDate, parseMoney, moneyPlain, monthLabel, money, uid, addMonths } from './util.js';
+import { esc, icon, today, isoDate, parseMoney, moneyPlain, monthLabel, money, uid, addMonths, shiftDate, round2, shortDate, FEATURES } from './util.js';
 import { openSheet, closeSheet, confirmSheet, rerender, toast, on, go } from './ui.js';
 import { parseBankMessage } from './capture.js';
 import { putReceipt, getReceipt, deleteReceipt, prepareFile } from './receipts.js';
@@ -15,16 +15,44 @@ const TYPES = [
   ['card', 'Cartão', 'credit-card'],
 ];
 
+// alcance ao editar um lançamento de série (valores aceitos por updateTransaction)
+const EDIT_SCOPES = [['one', 'Só este'], ['future', 'Este e os próximos'], ['all', 'Todos da série']];
+
 const yesterday = () => {
   const d = new Date();
   d.setDate(d.getDate() - 1);
   return isoDate(d);
 };
 
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+// parcelas anteriores à atual (k) no "Já estou pagando": singular quando só a 1ª ficou para trás
+const priorLine = (k, done) => (k - 1 === 1 ? `a parcela 1 fica no histórico como já ${done}` : `as parcelas 1 a ${k - 1} ficam no histórico como já ${done}s`);
+
+// aviso quando a soma das parcelas digitadas não bate com o valor informado (tolerância de 1 centavo)
+const schedMismatch = (sum, expected) =>
+  expected > 0 && Math.abs(round2(sum - expected)) >= 0.01
+    ? `A soma das parcelas (${money(sum)}) é diferente do valor informado (${money(expected)}). Será salvo o que está nas parcelas.`
+    : '';
+
+// valor negativo com o sinal de menos tipográfico: −R$ 10,00
+const negMoney = (v) => `−${money(Math.abs(v))}`;
+
+/** Move uma data como a 1ª parcela foi movida: mesmo dia → em meses; senão → em dias corridos. */
+function moveDate(iso, from, to) {
+  if (!iso) return iso;
+  const [y1, m1, d1] = from.split('-').map(Number);
+  const [y2, m2, d2] = to.split('-').map(Number);
+  if (d1 === d2) return shiftDate(iso, (y2 - y1) * 12 + m2 - m1);
+  const days = Math.round((new Date(y2, m2 - 1, d2) - new Date(y1, m1 - 1, d1)) / 864e5);
+  const x = new Date(`${iso}T12:00`);
+  x.setDate(x.getDate() + days);
+  return isoDate(x);
+}
+
 const activeAccounts = () => S.accounts.filter((a) => !a.archived);
 const activeCards = () => S.cards.filter((c) => !c.archived);
 const accountOptions = (selected) =>
-  activeAccounts().map((a) => `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${esc(a.name)}${S.accounts.some((x) => x.scope === 'pj') ? ` · ${SCOPES[a.scope || 'pf']}` : ''}</option>`).join('');
+  activeAccounts().map((a) => `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${esc(a.name)}${S.settings.business && S.accounts.some((x) => x.scope === 'pj') ? ` · ${SCOPES[a.scope || 'pf']}` : ''}</option>`).join('');
 
 const catOption = (c, selectedRoot) => `<label class="cat-opt" style="--c:${c.color}"><input type="radio" name="categoryId" value="${c.id}" ${c.id === selectedRoot ? 'checked' : ''}>
       <span class="cat-badge sm">${icon(c.icon, 16)}</span><span>${esc(c.name)}</span></label>`;
@@ -109,16 +137,18 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
     </div>
 
     ${kind === 'card' ? '' : `<label class="switch-row"><span data-paid-label>${kind === 'income' ? 'Recebido' : kind === 'transfer' ? 'Transferência efetuada' : 'Pago'}</span><input type="checkbox" role="switch" name="paid" ${v.paid !== false && !(instPreset && !isEdit) ? 'checked' : ''}></label>`}
+    ${kind === 'expense' || kind === 'transfer' ? '<p class="hint warn-line" data-neg hidden></p>' : ''}
 
     ${
       isEdit
         ? v.groupId
-          ? `<label class="switch-row"><span>Aplicar alterações às próximas ${v.installment ? 'parcelas' : 'repetições'}</span><input type="checkbox" role="switch" name="applyFuture"></label>
+          ? `<div class="field"><span>Aplicar as alterações a</span><div class="seg three" data-scope role="radiogroup" aria-label="Aplicar as alterações a">
+               ${EDIT_SCOPES.map(([val, l], i) => `<label class="seg-btn ${i ? '' : 'on'}"><input type="radio" name="editScope" value="${val}" ${i ? '' : 'checked'}>${l}</label>`).join('')}</div></div>
              <p class="hint">${v.installment ? `Parcela ${v.installment.n} de ${v.installment.total}${v.anticipated ? ' · antecipada' : ''}` : 'Lançamento fixo mensal'}</p>`
           : ''
         : `<div class="row2">
-            <label class="field"><span>Repetir</span>
-              <select name="repeat"><option value="none">Não repete</option><option value="fixed">Fixa (todo mês)</option>${kind === 'transfer' ? '' : `<option value="installments" ${preset.repeat === 'installments' ? 'selected' : ''}>Parcelada</option>`}</select></label>
+            <label class="field"><span>${preset.payable ? 'Forma' : 'Repetir'}</span>
+              <select name="repeat"><option value="none">${preset.payable ? 'À vista / parcela única' : 'Não repete'}</option>${kind === 'transfer' ? '' : `<option value="installments" ${preset.repeat === 'installments' ? 'selected' : ''}>${preset.payable ? 'Parcelado' : 'Parcelada'}</option>`}<option value="fixed">Fixa (todo mês)</option></select></label>
             <label class="field" data-times ${preset.repeat === 'installments' ? '' : 'hidden'}><span>Nº de parcelas</span><input name="times" type="number" min="2" max="420" value="${preset.times || 2}" inputmode="numeric"></label>
           </div>
           <div class="installment-opts" data-inst-opts ${instPreset ? '' : 'hidden'}>
@@ -130,6 +160,10 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
             <p class="hint" data-ongoing-hint hidden></p>
             ${kind === 'card' ? '<p class="hint">Cada fatura recebe só a parcela do mês. O restante ocupa o limite do cartão, mas não entra no valor da fatura atual.</p>' : ''}
             <p class="hint" data-inst-preview></p>
+            ${kind === 'card' ? '' : `<details class="inst-schedule" data-schedule><summary>${icon('list-ordered', 15)} Vencimentos e valores de cada parcela</summary>
+              <div class="inst-rows" data-rows></div>
+              <p class="hint" data-sched-sum></p>
+              <button type="button" class="link" data-sched-reset>Recalcular parcelas iguais e mensais</button></details>`}
           </div>`
     }
 
@@ -157,7 +191,8 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
 
     <p class="form-error" role="alert" hidden></p>
     <div class="form-actions">
-      ${isEdit ? `<button type="button" class="btn danger ghost" data-delete>${icon('trash-2', 18)} Excluir</button>` : ''}
+      ${isEdit ? `<button type="button" class="btn danger ghost" data-delete>${icon('trash-2', 18)} Excluir</button>
+        <button type="button" class="btn ghost" data-duplicate>${icon('layers', 18)} Duplicar</button>` : ''}
       <button type="submit" class="btn primary">${icon('check', 18)} Salvar</button>
     </div>
   </form>`;
@@ -169,13 +204,16 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
       const showErr = (m) => {
         err.textContent = m;
         err.hidden = false;
+        err.scrollIntoView({ block: 'center', behavior: 'smooth' });
       };
+      // some ao corrigir qualquer campo
+      form.addEventListener('input', () => (err.hidden = true));
       let removeReceipt = false;
 
       form.querySelectorAll('[data-kind]').forEach((b) =>
         b.addEventListener('click', () =>
           openTxForm(b.dataset.kind, null, {
-            date: form.date.value, amount: parseMoney(form.amount.value), desc: form.desc.value, cardId: preset.cardId,
+            date: form.date.value, amount: parseMoney(form.amount.value), desc: form.desc.value, cardId: preset.cardId, paid: preset.paid, accountId: preset.accountId, payable: preset.payable,
             person: form.person?.value || preset.person, repeat: form.repeat?.value === 'installments' ? 'installments' : undefined, times: Number(form.times?.value) || preset.times,
           }),
         ),
@@ -216,8 +254,8 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
         const inv = c && form.date.value ? invoiceFor(c, form.date.value) : null;
         if (on && ongoingHint)
           ongoingHint.innerHTML = c
-            ? `Ex.: na fatura do banco aparece <b>04/10</b> → informe 4. A parcela ${k} entra na fatura de <b>${inv ? monthLabel(inv) : '—'}</b>; as parcelas 1 a ${k - 1} ficam no histórico como já pagas, <b>fora das faturas, do limite e dos relatórios</b>.`
-            : `As parcelas 1 a ${k - 1} ficam no histórico como já ${kind === 'income' ? 'recebidas' : 'pagas'}, <b>sem mexer no saldo das contas nem nos relatórios</b>. A parcela ${k} vence na data informada.`;
+            ? `Ex.: na fatura do banco aparece <b>04/10</b> → informe 4. A parcela ${k} entra na fatura de <b>${inv ? monthLabel(inv) : '—'}</b>; ${priorLine(k, 'paga')}, <b>fora das faturas, do limite e dos relatórios</b>.`
+            : `${cap(priorLine(k, kind === 'income' ? 'recebida' : 'paga'))}, <b>sem mexer no saldo das contas nem nos relatórios</b>. A parcela ${k} vence na data informada.`;
         preview.innerHTML = v
           ? `${n}× de <b>${money(per)}</b> · total <b>${money(per * n)}</b>${k > 1 ? ` · faltam ${n - k + 1} parcela(s), <b>${money(per * (n - k + 1))}</b>` : ''}${inv ? ` · última na fatura de ${monthLabel(addMonths(inv, n - k), { short: true })}` : ''}`
           : '';
@@ -234,9 +272,124 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
           updatePreview();
         }),
       );
+      // alcance da edição numa série (fixa ou parcelada)
+      form.querySelectorAll('[name=editScope]').forEach((r) =>
+        r.addEventListener('change', () => r.closest('.seg').querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('on', b.contains(r) && r.checked))),
+      );
       ['times', 'amountMode', 'startAt', 'amount', 'person'].forEach((n) => form[n]?.addEventListener('input', updatePreview));
       ['amountMode', 'cardId', 'date'].forEach((n) => form[n]?.addEventListener('change', updatePreview));
       updatePreview();
+
+      // parcelas uma a uma (fora do cartão, compra nova): vencimento e valor de cada uma, ajustáveis
+      const sched = form.querySelector('[data-schedule]');
+      const rowsBox = sched?.querySelector('[data-rows]');
+      const schedSum = sched?.querySelector('[data-sched-sum]');
+      let custom = false;
+      let kept = []; // parcelas ajustadas tiradas do fim: voltam se o nº de parcelas aumentar de novo
+      let baseDate = form.date.value; // 1ª parcela de referência para deslocar as datas ajustadas
+      // valor padrão de cada parcela (a 1ª absorve os centavos que sobram)
+      const perDefault = (n) => {
+        const v = parseMoney(form.amount.value);
+        return form.amountMode.value === 'per' ? v : Math.floor((v / n) * 100) / 100;
+      };
+      const defaultSchedule = () => {
+        const n = Math.max(2, Number(form.times.value) || 2);
+        const v = parseMoney(form.amount.value);
+        const per = perDefault(n);
+        const total = form.amountMode.value === 'per' ? round2(v * n) : v;
+        return Array.from({ length: n }, (_, i) => ({ date: form.date.value ? shiftDate(form.date.value, i) : '', amount: i === 0 ? round2(total - per * (n - 1)) : per }));
+      };
+      const rowHtml = (p, i) =>
+        `<div class="inst-row"><span class="inst-n">${i + 1}</span><input type="date" value="${p.date}" aria-label="Vencimento da parcela ${i + 1}"><input inputmode="decimal" autocomplete="off" value="${p.amount ? moneyPlain(p.amount) : ''}" aria-label="Valor da parcela ${i + 1}"></div>`;
+      const writeRows = (list) => (rowsBox.innerHTML = list.map(rowHtml).join(''));
+      // com ajustes: mantém as linhas; acrescenta mensais no fim (a partir da última) ou tira as do fim
+      const resizeCustom = (n) => {
+        const list = readSchedule();
+        if (list.length === n) return;
+        if (list.length > n) kept = [...list.splice(n), ...kept];
+        while (list.length < n) {
+          if (kept.length) list.push(kept.shift());
+          else {
+            const last = list[list.length - 1]?.date;
+            list.push({ date: last ? shiftDate(last, 1) : '', amount: perDefault(n) });
+          }
+        }
+        writeRows(list);
+      };
+      const readSchedule = () =>
+        [...rowsBox.querySelectorAll('.inst-row')].map((r) => ({ date: r.querySelector('input[type=date]').value, amount: parseMoney(r.querySelector('input[inputmode]').value) }));
+      const sumSchedule = () => {
+        const list = readSchedule();
+        const total = round2(list.reduce((a, p) => a + (p.amount || 0), 0));
+        const last = list[list.length - 1]?.date;
+        const informed = parseMoney(form.amount.value);
+        const expected = form.amountMode.value === 'per' ? round2(informed * list.length) : informed;
+        const warn = schedMismatch(total, expected);
+        schedSum.innerHTML = `${list.length} parcela(s) · total <b>${money(total)}</b>${last ? ` · última em ${shortDate(last)}` : ''}${custom ? ' · <span class="muted">ajustadas à mão: mudar a data desloca todas, o nº de parcelas acrescenta ou tira no fim e o valor não as altera</span>' : ''}${warn ? `<br><span class="warn-line">${icon('triangle-alert', 14)} ${warn}</span>` : ''}`;
+      };
+      const drawSchedule = () => {
+        if (!sched) return;
+        sched.hidden = !isInst() || ongoing();
+        if (sched.hidden) return;
+        if (custom) resizeCustom(Math.max(2, Number(form.times.value) || 2));
+        else writeRows(defaultSchedule());
+        sumSchedule();
+      };
+      // refazer tudo igual e mensal: só pelo botão
+      const recalc = () => ((custom = false), (kept = []), drawSchedule());
+      // nova data da 1ª parcela: com ajustes, desloca todas as datas (e as guardadas) igual
+      const moveSchedule = () => {
+        const to = form.date.value;
+        if (custom && baseDate && to && to !== baseDate) {
+          writeRows(readSchedule().map((p) => ({ ...p, date: moveDate(p.date, baseDate, to) })));
+          kept = kept.map((p) => ({ ...p, date: moveDate(p.date, baseDate, to) }));
+        }
+        if (to) baseDate = to;
+        drawSchedule();
+      };
+      if (sched) {
+        rowsBox.addEventListener('input', () => ((custom = true), sumSchedule()));
+        sched.querySelector('[data-sched-reset]').addEventListener('click', recalc);
+        ['times', 'amount'].forEach((n) => form[n]?.addEventListener('input', drawSchedule));
+        form.amountMode?.addEventListener('change', drawSchedule);
+        form.date.addEventListener('change', moveSchedule);
+        repeat?.addEventListener('change', drawSchedule);
+        form.querySelectorAll('[name=progress]').forEach((r) => r.addEventListener('change', drawSchedule));
+        drawSchedule();
+      }
+
+      // saldo negativo: despesa/transferência paga fora do cartão (avisa, não bloqueia)
+      const negLine = form.querySelector('[data-neg]');
+      // quanto sai da conta agora: no parcelamento, só a parcela da data informada
+      const outNow = () => {
+        const val = parseMoney(form.amount.value);
+        if (isEdit || !isInst()) return val;
+        if (sched && !sched.hidden && custom) return readSchedule()[0]?.amount || 0;
+        const n = Math.max(2, Number(form.times.value) || 2);
+        const per = round2(perDefault(n));
+        if (startAt() > 1) return per;
+        const total = form.amountMode.value === 'per' ? round2(val * n) : val;
+        return round2(total - per * (n - 1));
+      };
+      // saldo depois de salvar; na edição tira o efeito antigo do lançamento, que já está no saldo
+      const balanceAfter = (accId) => {
+        let b = accountBalance(accId);
+        if (isEdit && v.paid) b -= accountEffect(v, accId);
+        return round2(b - outNow());
+      };
+      const checkNeg = () => {
+        if (!negLine) return;
+        const accId = form.accountId.value;
+        const after = form.paid.checked && !v.prior && parseMoney(form.amount.value) > 0 ? balanceAfter(accId) : 0;
+        negLine.hidden = !(after < 0);
+        if (after < 0) negLine.innerHTML = `${icon('triangle-alert', 14)} Esta ${kind === 'transfer' ? 'transferência' : 'despesa'} deixa <b>${esc(account(accId)?.name)}</b> em <b>${negMoney(after)}</b>.`;
+      };
+      if (negLine) {
+        form.addEventListener('input', checkNeg);
+        form.addEventListener('change', checkNeg);
+        sched?.querySelector('[data-sched-reset]').addEventListener('click', checkNeg);
+        checkNeg();
+      }
 
       // subcategorias da categoria escolhida
       const subWrap = form.querySelector('[data-sub]');
@@ -292,6 +445,15 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
         e.currentTarget.remove();
       });
       sheet.querySelector('[data-view-receipt]')?.addEventListener('click', () => viewReceipt(v.receipt));
+
+      // Duplicar: novo lançamento com os mesmos dados, na data de hoje e fora de qualquer série
+      sheet.querySelector('[data-duplicate]')?.addEventListener('click', () => {
+        openTxForm(kind, null, {
+          amount: v.amount, desc: v.desc, categoryId: v.categoryId, accountId: v.accountId, toAccountId: v.toAccountId, cardId: v.cardId,
+          tags: [...(v.tags || [])], note: v.note, person: v.person, ignored: v.ignored, date: today(),
+        });
+        toast('Cópia aberta: confira e salve.');
+      });
 
       sheet.querySelector('[data-delete]')?.addEventListener('click', async () => {
         const choice = v.groupId
@@ -350,16 +512,25 @@ export function openTxForm(kind = 'expense', tx = null, preset = {}) {
           data.receipt = null;
         }
 
+        // depois de salvar: avisa no toast se a conta de saída ficou negativa
+        const negNote = () => {
+          if ((kind !== 'expense' && kind !== 'transfer') || !data.paid || v.prior) return '';
+          const b = accountBalance(data.accountId);
+          return b < 0 ? ` Atenção: ${account(data.accountId)?.name} ficou negativa (${negMoney(b)}).` : '';
+        };
         if (isEdit) {
-          updateTransaction(v.id, data, form.applyFuture?.checked);
-          toast('Lançamento atualizado.');
+          const scope = form.querySelector('[name=editScope]:checked')?.value || 'one';
+          updateTransaction(v.id, data, scope);
+          toast((scope === 'all' ? 'Toda a série foi atualizada.' : scope === 'future' ? 'Este e os próximos foram atualizados.' : 'Lançamento atualizado.') + negNote());
         } else {
           const rep = form.repeat?.value || 'none';
           const times = Math.max(2, Number(form.times?.value) || 2);
           const k = rep === 'installments' ? startAt() : 1;
           if (rep === 'installments' && Number(form.startAt?.value) > times && ongoing()) return showErr('A parcela atual não pode ser maior que o número de parcelas.');
-          addTransaction(data, rep, times, { startAt: k, perInstallment: rep === 'installments' && form.amountMode?.value === 'per' });
-          toast(rep === 'installments' ? (k > 1 ? `Parcelamento cadastrado a partir da parcela ${k}/${times}.` : `Compra parcelada em ${times}x criada.`) : rep === 'fixed' ? 'Lançamento fixo criado.' : 'Lançamento salvo.');
+          const schedule = rep === 'installments' && sched && !sched.hidden && custom ? readSchedule() : null;
+          if (schedule?.some((p) => !p.date || !(p.amount > 0))) return showErr('Confira o vencimento e o valor de cada parcela.');
+          addTransaction(data, rep, times, { startAt: k, perInstallment: rep === 'installments' && form.amountMode?.value === 'per', schedule });
+          toast((rep === 'installments' ? (k > 1 ? `Parcelamento cadastrado a partir da parcela ${k}/${times}.` : `Compra parcelada em ${times}x criada.`) : rep === 'fixed' ? 'Lançamento fixo criado.' : 'Lançamento salvo.') + negNote());
         }
         closeSheet();
         rerender();
@@ -379,7 +550,10 @@ export async function viewReceipt(r) {
   });
 }
 
-/** Colar o texto de uma notificação ou SMS do banco e abrir o lançamento já preenchido. */
+/**
+ * Colar o texto de uma notificação ou SMS do banco e abrir o lançamento já preenchido.
+ * ARQUIVADO para uso futuro: desligado por FEATURES.bankPaste (util.js); o código fica pronto para religar.
+ */
 function openCapture() {
   openSheet(`<form class="tx-form"><h2 class="sheet-title">${icon('message-circle', 20)} Lançar a partir de notificação ou SMS</h2>
     <p class="muted small">Copie a notificação ou o SMS do seu banco e cole abaixo. Reconhecemos valor, estabelecimento, data e tipo (compra no cartão, Pix, débito, estorno), no formato de Nubank, Inter, BB, C6, Bradesco, Santander, Itaú, Caixa, Neon, Digio, Sicoob e outros.</p>
@@ -428,10 +602,22 @@ export function openRefund(cardId, preset = {}) {
     <label class="field"><span>Descrição</span><input name="desc" value="${esc(preset.desc || '')}" placeholder="Ex.: Estorno loja X"></label>
     <label class="field"><span>Cartão</span><select name="cardId">${activeCards().map((c) => `<option value="${c.id}" ${c.id === cardId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
     <label class="field"><span>Data</span><input type="date" name="date" value="${preset.date || today()}"></label>
-    <p class="hint">O estorno abate o valor da fatura em que a data cair.</p>
+    <p class="hint" data-refund-hint></p>
     <div class="form-actions"><button class="btn primary">${icon('check', 18)} Lançar estorno</button></div></form>`, {
     onMount(sheet) {
       const f = sheet.querySelector('form');
+      // mostra em qual fatura o estorno entra (e alerta se diferir da fatura que o usuário estava vendo)
+      const hint = f.querySelector('[data-refund-hint]');
+      const updateHint = () => {
+        const c = card(f.cardId.value);
+        if (!c || !f.date.value) return (hint.textContent = '');
+        const inv = invoiceFor(c, f.date.value);
+        const warn = preset.invoice && preset.invoice !== inv ? ` <span class="warn-line">Atenção: você está vendo a fatura de ${monthLabel(preset.invoice)}, mas pela data este estorno entra na fatura de ${monthLabel(inv)}. Ajuste a data se quiser.</span>` : '';
+        hint.innerHTML = `Entra na fatura de ${monthLabel(inv)} (vence ${shortDate(invoiceDueDate(c, inv))}).${warn}`;
+      };
+      f.cardId.addEventListener('change', updateHint);
+      f.date.addEventListener('change', updateHint);
+      updateHint();
       f.addEventListener('submit', (e) => {
         e.preventDefault();
         const amount = parseMoney(f.amount.value);
@@ -460,9 +646,10 @@ on({
     } else if (t.type === 'payment') go(`#/cartao/${t.cardId}`);
     else openTxForm(null, t);
   },
-  capture: () => openCapture(),
+  // "Colar notificação/SMS" arquivado: só existe com FEATURES.bankPaste ligado (util.js)
+  ...(FEATURES.bankPaste ? { capture: () => openCapture() } : {}),
   'quick-add': () =>
     openSheet(`<h2 class="sheet-title">Novo lançamento</h2>
       <div class="quick-grid">${TYPES.map(([k, l, ic]) => `<button class="quick t-${k}" data-action="new-tx" data-kind="${k}">${icon(ic, 22)}<span>${l}</span></button>`).join('')}</div>
-      <button class="btn ghost block capture-btn" data-action="capture">${icon('message-circle', 18)} Colar notificação ou SMS do banco</button>`),
+      ${FEATURES.bankPaste ? `<button class="btn ghost block capture-btn" data-action="capture">${icon('message-circle', 18)} Colar notificação ou SMS do banco</button>` : ''}`),
 });

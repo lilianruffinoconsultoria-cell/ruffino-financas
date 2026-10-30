@@ -21,12 +21,16 @@ export function renderTags() {
   return `<section>
     ${pageHead('Tags', { back: '#/mais' })}
     ${scopeChips()}
-    ${S.settings.travelTag ? `<p class="badge-line">${icon('plane', 14)} Modo viagem ativo com a tag <b>#${esc(S.settings.travelTag)}</b> · <button class="link" data-action="travel">alterar</button></p>` : ''}
+    ${S.settings.travelTag
+      ? `<div class="badge-line travel-line">${icon('plane', 14)}<span class="grow-text">Modo viagem ativo com a tag <b>#${esc(S.settings.travelTag)}</b></span>
+          <button class="link" data-action="travel">alterar</button><button class="btn ghost sm" data-action="travel-off">${icon('x', 14)} Desligar</button></div>`
+      : `<div class="travel-off-line"><span class="muted small">${icon('plane', 14)} Modo viagem desligado. Ligado, todo lançamento novo recebe a tag da viagem.</span>
+          <button class="btn ghost sm" data-action="travel">${icon('plane', 16)} Ativar modo viagem</button></div>`}
     <article class="card">
       <header class="card-head"><h2>Suas tags</h2><span class="muted small">${monthLabel(UI.month)} · todo o período</span></header>
       ${tags.length ? `<ul class="list">${tags.map((x) => `<li class="row">
         <span class="cat-badge" style="--c:#C5A059">${icon('tag', 18)}</span>
-        <a class="grow" href="#/transacoes" data-action="tx-tag" data-v="${esc(x.tag)}"><b>#${esc(x.tag)}</b><small>${x.n} lançamento(s) · no mês ${$m(x.month.exp)} · total ${$m(x.all.exp)}${x.all.inc ? ` · receitas ${$m(x.all.inc)}` : ''}</small></a>
+        <a class="grow tag-row" href="#/transacoes" data-action="tx-tag" data-v="${esc(x.tag)}"><b>#${esc(x.tag)}</b><small>${x.n} lançamento(s)</small><small class="tag-sums"><span>no mês ${$m(x.month.exp)}</span> <span>· total ${$m(x.all.exp)}</span>${x.all.inc ? ` <span>· receitas ${$m(x.all.inc)}</span>` : ''}</small></a>
         <button class="icon-btn" data-action="tag-rename" data-v="${esc(x.tag)}" aria-label="Editar tag">${icon('pencil', 16)}</button></li>`).join('')}</ul>`
         : empty('tag', 'Nenhuma tag ainda', 'Adicione tags nos lançamentos (ex.: viagem, reforma, trabalho) para somar gastos que atravessam categorias.')}
     </article>
@@ -60,6 +64,13 @@ on({
         });
       },
     });
+  },
+  // mesmo setting de Configurações (settings.travelTag); vazio = desligado
+  'travel-off': () => {
+    S.settings.travelTag = '';
+    save();
+    toast('Modo viagem desativado.');
+    rerender();
   },
   travel: () => {
     const cur = S.settings.travelTag;

@@ -7,7 +7,7 @@ import {
   Wifi, Coins, CircleHelp, ArrowUp, ArrowDown, Repeat, Layers, ChartColumn, FileText, Lightbulb, Building2, User,
   Delete, CircleCheck, Circle, Info, Sparkles, HandCoins, CalendarClock, Clock, Shield, Palette, Music, Bus, Pill,
   Scissors, Sofa, Laptop, Popcorn, Package, ShoppingBag, Heart, Rocket, Star, ScrollText, Scale, MessageCircle,
-  Database, RotateCcw, Contrast, Handshake, UserRound, ArrowUpRight, ArrowDownLeft, TriangleAlert, Cloud, CloudOff, RefreshCw, LogOut, Mail, KeyRound,
+  Database, RotateCcw, Contrast, Handshake, UserRound, ArrowUpRight, ArrowDownLeft, TriangleAlert, Cloud, CloudOff, RefreshCw, LogOut, Mail, KeyRound, LayoutDashboard, ListOrdered, LogIn, SlidersHorizontal, ChevronDown,
 } from 'lucide';
 import { Capacitor } from '@capacitor/core';
 
@@ -19,7 +19,7 @@ const L = {
   Wifi, Coins, CircleHelp, ArrowUp, ArrowDown, Repeat, Layers, ChartColumn, FileText, Lightbulb, Building2, User,
   Delete, CircleCheck, Circle, Info, Sparkles, HandCoins, CalendarClock, Clock, Shield, Palette, Music, Bus, Pill,
   Scissors, Sofa, Laptop, Popcorn, Package, ShoppingBag, Heart, Rocket, Star, ScrollText, Scale, MessageCircle,
-  Database, RotateCcw, Contrast, Handshake, UserRound, ArrowUpRight, ArrowDownLeft, TriangleAlert, Cloud, CloudOff, RefreshCw, LogOut, Mail, KeyRound,
+  Database, RotateCcw, Contrast, Handshake, UserRound, ArrowUpRight, ArrowDownLeft, TriangleAlert, Cloud, CloudOff, RefreshCw, LogOut, Mail, KeyRound, LayoutDashboard, ListOrdered, LogIn, SlidersHorizontal, ChevronDown,
 };
 
 /** Ícones que o usuário pode escolher para categorias e objetivos. */
@@ -40,12 +40,38 @@ export const money = (v) => BRL.format(round2(v || 0));
 export const moneyPlain = (v) => round2(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** Aceita "1.234,56", "1234,5", "1234.56" e "R$ 10". */
+/** Valor digitado em reais: "1.234,56", "1234,56", "1.500" (milhar) e "10.5" (decimal). */
 export function parseMoney(str) {
   let s = String(str ?? '').trim().replace(/[^\d,.-]/g, '');
   if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ''); // ponto como separador de milhar
   const n = parseFloat(s);
   return Number.isFinite(n) ? round2(Math.abs(n)) : 0;
 }
+
+/**
+ * Máscara de dinheiro estilo apps de banco: só os dígitos contam e os 2 últimos são os centavos
+ * ("5" → "0,05", "459" → "4,59", "123456" → "1.234,56"). Sem dígitos (ou zero) → '' (mostra o placeholder).
+ * `pasted`: texto colado é lido como reais por parseMoney ("1.500", "1.500,00", "R$ 1500" → "1.500,00").
+ */
+export function maskMoney(value, pasted = false) {
+  const s = String(value ?? '');
+  if (pasted) {
+    const n = parseMoney(s);
+    return n ? moneyPlain(n) : '';
+  }
+  const digits = s.replace(/\D/g, '').replace(/^0+/, '').slice(0, 13);
+  if (!digits) return '';
+  const d = digits.padStart(3, '0');
+  return `${d.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${d.slice(-2)}`;
+}
+
+/**
+ * Recursos desligados (código mantido para uso futuro).
+ * bankPaste: "Colar notificação/SMS do banco" (openCapture em form.js + parseBankMessage em capture.js).
+ * Arquivado: para religar, troque para true — volta o botão no "+" e no menu Mais (main.js deixa de removê-lo).
+ */
+export const FEATURES = { bankPaste: false };
 
 export const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -92,6 +118,8 @@ export function dayLabel(iso) {
   const d = new Date(yy, mm - 1, dd);
   return `${cap(WEEK[d.getDay()])}, ${dd} de ${MONTHS[mm - 1]}`;
 }
+/** Dias de a até b (negativo se b é anterior). */
+export const daysBetween = (a, b) => Math.round((new Date(`${b}T12:00`) - new Date(`${a}T12:00`)) / 864e5);
 export const shortDate = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 
 // ---------- ícones (Lucide, renderizados como texto SVG) ----------

@@ -3,6 +3,9 @@ import { S, save, category, categoriesOf, subcategoriesOf, spentInCategory, aver
 import { esc, icon, parseMoney, moneyPlain, monthLabel } from '../util.js';
 import { UI, ACTIONS, $m, monthSwitcher, scopeChips, catBadge, progress, empty, on, rerender, openSheet, closeSheet, toast, confirmSheet } from '../ui.js';
 
+// "R$ x de R$ y" quebra entre os valores (nunca no meio de um valor) em telas estreitas
+const spentOf = (spent, limit) => `<span class="nowrap">${$m(spent)}</span> de <span class="nowrap">${$m(limit)}</span>`;
+
 export function renderPlanning() {
   const ym = UI.month;
   const plan = budgetFor(ym);
@@ -28,7 +31,7 @@ export function renderPlanning() {
       .filter((s) => plan.cats[s.id])
       .map((s) => {
         const sp = spentInCategory(s.id, ym, UI.scope);
-        return `<li class="sub-row"><button class="row col linklike" data-action="budget-edit" data-id="${s.id}"><div class="row-in"><span class="sub-mark">↳</span><span class="grow"><b>${esc(s.name)}</b><small>${$m(sp)} de ${$m(plan.cats[s.id])}</small></span></div>${progress(sp, plan.cats[s.id], { warn })}</button></li>`;
+        return `<li class="sub-row"><button class="row col linklike" data-action="budget-edit" data-id="${s.id}"><div class="row-in"><span class="sub-mark">↳</span><span class="grow"><b>${esc(s.name)}</b><small class="plan-amt">${spentOf(sp, plan.cats[s.id])}</small></span></div>${progress(sp, plan.cats[s.id], { warn })}</button></li>`;
       })
       .join('');
 
@@ -36,7 +39,7 @@ export function renderPlanning() {
     <header class="page-head"><h1>Planejamento</h1><div class="head-right">${monthSwitcher()}</div></header>
     ${scopeChips()}
     ${origin && origin !== ym ? `<p class="badge-line">${icon('info', 14)} Usando o planejamento de ${monthLabel(origin)}. Ao alterar, o novo plano vale a partir de ${monthLabel(ym)}.</p>` : ''}
-    <article class="hero slim">
+    <article class="hero slim plan-hero">
       <div class="hero-split">
         <div><p class="hero-k">${plan.total ? 'Gasto total do mês' : 'Gasto nas categorias planejadas'}</p><p class="hero-v sm">${$m(spentTotal)}</p></div>
         <div class="right"><p class="hero-k">${plan.total ? 'Meta geral' : 'Planejado'}</p><p class="hero-v sm gold">${$m(goal)}</p></div>
@@ -60,8 +63,8 @@ export function renderPlanning() {
       ${rows.length ? `<ul class="list">${rows.map((r) => `
         <li><button class="row col linklike" data-action="budget-edit" data-id="${r.cat.id}">
           <div class="row-in">${catBadge(r.cat, 36)}<span class="grow"><b>${esc(r.cat.name)}</b>
-            <small>${$m(r.spent)} de ${$m(r.limit)}</small></span>
-            <span class="num sm ${r.spent > r.limit ? 'neg' : ''}">${r.spent > r.limit ? `+${$m(r.spent - r.limit)}` : `${$m(r.limit - r.spent)} livre`}</span></div>
+            <small class="plan-amt">${spentOf(r.spent, r.limit)}</small></span>
+            <span class="num-col plan-left"><span class="num sm ${r.spent > r.limit ? 'neg' : ''}">${r.spent > r.limit ? `+${$m(r.spent - r.limit)}` : $m(r.limit - r.spent)}</span><small>${r.spent > r.limit ? 'acima' : 'livre'}</small></span></div>
           ${progress(r.spent, r.limit, { warn })}</button></li>${subRows(r)}`).join('')}</ul>`
         : empty('target', 'Nenhum limite definido', 'Escolha uma categoria abaixo ou use a sugestão automática.')}
     </article>
@@ -69,7 +72,7 @@ export function renderPlanning() {
     <article class="card">
       <header class="card-head"><h2>Sem planejamento</h2></header>
       <ul class="list">${others.map((o) => `<li><button class="row linklike" data-action="budget-edit" data-id="${o.cat.id}">
-        ${catBadge(o.cat, 32)}<span class="grow"><b>${esc(o.cat.name)}</b><small>Gasto no mês: ${$m(o.spent)}</small></span>
+        ${catBadge(o.cat, 32)}<span class="grow"><b>${esc(o.cat.name)}</b><small class="plan-amt">Gasto no mês: <span class="nowrap">${$m(o.spent)}</span></small></span>
         <span class="link">${icon('plus', 16)} Definir</span></button></li>`).join('')}</ul>
     </article>
   </section>`;

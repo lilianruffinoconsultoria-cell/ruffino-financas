@@ -1,29 +1,31 @@
 // Menu "Mais", gestão de categorias e configurações (tema, PIN, backup, dados de exemplo).
-import { S, save, replaceState, resetAll, seedDemo, category, categoriesOf, subcategoriesOf, COLORS, CATEGORY_TYPES, NEUTRAL_TYPES } from '../store.js';
-import { esc, icon, uid, today, saveFile, sha256, PICKABLE_ICONS } from '../util.js';
+import { S, save, replaceState, resetAll, seedDemo, category, categoryLabel, categoriesOf, subcategoriesOf, COLORS, CATEGORY_TYPES, NEUTRAL_TYPES, HOME_BLOCKS, defaultHomeBlocks, homeBlockOn, homeBlocksOrdered } from '../store.js';
+import { esc, icon, uid, today, saveFile, sha256, money, round2, PICKABLE_ICONS, FEATURES } from '../util.js';
 import { UI, pageHead, catBadge, on, rerender, openSheet, closeSheet, toast, confirmSheet, go } from '../ui.js';
 import { transactionsCsv } from './reports.js';
 import { applyTheme } from '../theme.js';
 import { cloudCard } from './cloud.js';
 
+// cópia dos dados de antes da última restauração de backup (para desfazer)
+const RESTORE_KEY = 'ruffino-financas:antes-restaurar';
+
 const MENU = [
   ['#/contas', 'landmark', 'Contas', 'Saldos, reajuste, arquivar e mover lançamentos'],
   ['#/cartoes', 'credit-card', 'Cartões de crédito', 'Faturas, compras parceladas, estorno e antecipação'],
-  ['#/parcelamentos', 'handshake', 'Parcelamentos', 'Com pessoas, lojas, carnês e crediários: a pagar e a receber'],
   ['#/planejamento', 'target', 'Planejamento', 'Limites do mês por categoria e alertas'],
   ['#/objetivos', 'piggy-bank', 'Objetivos', 'Metas de economia com prazo'],
   ['#/relatorios', 'chart-column', 'Relatórios', 'DRE do mês, comparativos e evolução'],
-  ['#/calendario', 'calendar', 'Calendário', 'Receitas, despesas e pendências por dia'],
   ['#/tags', 'tag', 'Tags e modo viagem', 'Totais por tag e viagem automática'],
   ['#/categorias', 'palette', 'Categorias', 'Subcategorias, ícones, cores e arquivo'],
   ['#/importar', 'upload', 'Importar extrato', 'Arquivo OFX ou CSV do banco'],
+  ['#/personalizar-inicio', 'layout-dashboard', 'Personalizar tela inicial', 'Escolha o que aparece no Início'],
   ['#/config', 'settings', 'Configurações', 'Tema, senha, backup e automações'],
 ];
 
 export function renderMore() {
   return `<section>
     <header class="page-head"><h1>Mais</h1></header>
-    <button class="consult capture" data-action="capture"><span class="menu-ic gold">${icon('sparkles', 22)}</span><span><b>Lançar pela notificação ou SMS</b><small>Cole a mensagem do banco e o lançamento sai preenchido</small></span></button>
+    ${FEATURES.bankPaste ? `<button class="consult capture" data-action="capture"><span class="menu-ic gold">${icon('sparkles', 22)}</span><span><b>Lançar pela notificação ou SMS</b><small>Cole a mensagem do banco e o lançamento sai preenchido</small></span></button>` : ''}
     <div class="menu-grid">${MENU.map(([href, ic, t, d]) => `<a class="menu-item" href="${href}"><span class="menu-ic">${icon(ic, 22)}</span><span><b>${t}</b><small>${d}</small></span>${icon('chevron-right', 18, 'muted')}</a>`).join('')}</div>
     <a class="consult" href="https://wa.me/5514996805832?text=${encodeURIComponent('Olá, Lilian! Vim pelo app Ruffino Finanças e gostaria de falar sobre consultoria financeira.')}" target="_blank" rel="noopener">
       <span class="menu-ic gold">${icon('message-circle', 22)}</span><span><b>Fale com a consultora</b><small>Lilian Ruffino Consultoria · BPO financeiro, planejamento e tributos</small></span></a>
@@ -91,23 +93,52 @@ function categoryForm(c, parentId = null) {
         const subs = isSub ? [] : subcategoriesOf(c.id, { archived: true });
         const others = categoriesOf(c.type).filter((x) => x.id !== c.id);
         if (!isSub && !others.length) return toast('Mantenha ao menos uma categoria.');
-        const fallback = isSub ? parent : others.find((x) => x.name === 'Outros') || others[0];
         const ids = new Set([c.id, ...subs.map((s) => s.id)]);
         const n = S.transactions.filter((t) => ids.has(t.categoryId)).length;
-        const ok = await confirmSheet({
-          title: `Excluir “${c.name}”?`,
-          text: `${n ? `${n} lançamento(s) serão reassociados a “${fallback.name}”. ` : ''}${subs.length ? `As ${subs.length} subcategoria(s) também serão excluídas. ` : ''}Se quiser manter o histórico separado, prefira arquivar.`,
-          options: [{ label: 'Excluir', value: 'yes', danger: true }],
-        });
-        if (!ok) return;
-        for (const t of S.transactions) if (ids.has(t.categoryId)) t.categoryId = fallback.id;
+        const extra = `${subs.length ? `As ${subs.length} subcategoria(s) também serão excluídas. ` : ''}Se quiser manter o histórico separado, prefira arquivar.`;
+        let dest = null;
+        if (n) dest = await pickDestination(c, { ids, n, extra, parent: isSub ? parent : null });
+        else if (!(await confirmSheet({ title: `Excluir “${c.name}”?`, text: extra, options: [{ label: 'Excluir', value: 'yes', danger: true }] }))) return;
+        if (n && !dest) return;
+        for (const t of S.transactions) if (ids.has(t.categoryId)) t.categoryId = dest;
         S.categories = S.categories.filter((x) => !ids.has(x.id));
         for (const plan of Object.values(S.budgetMonths)) for (const id of ids) delete plan.cats[id];
         save();
-        toast('A reassociação foi concluída com sucesso.');
+        const what = isSub ? 'Subcategoria excluída' : 'Categoria excluída';
+        toast(n ? `${what} e ${n} lançamento(s) movido(s) para “${categoryLabel(dest)}”.` : `${what}.`);
         rerender();
       });
     },
+  });
+}
+
+/**
+ * Pergunta para qual categoria vão os lançamentos da categoria excluída (mesmo tipo; subcategorias
+ * de outras categorias também valem). Resolve com o id escolhido ou null se cancelar.
+ */
+function pickDestination(c, { ids, n, extra, parent }) {
+  const opts = categoriesOf(c.type)
+    .filter((x) => !ids.has(x.id))
+    .flatMap((x) => [x, ...subcategoriesOf(x.id).filter((s) => !ids.has(s.id))]);
+  const def = parent?.id || opts.find((x) => x.name === 'Outros' && !x.parentId)?.id || opts[0]?.id;
+  return new Promise((resolve) => {
+    openSheet(`<form class="tx-form"><h2 class="sheet-title">Excluir “${esc(c.name)}”?</h2>
+      <p class="muted">${n} lançamento(s) usam ${c.parentId ? 'esta subcategoria' : 'esta categoria'}${c.parentId ? '' : ' ou as subcategorias dela'}. Escolha para onde eles vão.</p>
+      <label class="field"><span>Mover os lançamentos para</span><select name="dest">${opts.map((x) => `<option value="${x.id}" ${x.id === def ? 'selected' : ''}>${esc(categoryLabel(x.id))}${x.id === parent?.id ? ' (categoria mãe)' : ''}</option>`).join('')}</select></label>
+      <p class="hint">${esc(extra)}</p>
+      <div class="stack"><button class="btn danger">${icon('trash-2', 18)} Mover e excluir</button><button type="button" class="btn ghost" data-cancel>Cancelar</button></div></form>`, {
+      onMount(sheet) {
+        let chosen = null;
+        const f = sheet.querySelector('form');
+        f.addEventListener('submit', (e) => {
+          e.preventDefault();
+          chosen = f.dest.value || null;
+          closeSheet();
+        });
+        sheet.querySelector('[data-cancel]').addEventListener('click', () => closeSheet());
+        return () => resolve(chosen);
+      },
+    });
   });
 }
 
@@ -127,8 +158,16 @@ export function renderSettings() {
       <label class="switch-row"><span>Abrir com valores ocultos</span><input type="checkbox" role="switch" data-setting="hide" ${st.hide ? 'checked' : ''}></label>
     </article>
     <article class="card">
+      <header class="card-head"><h2>Calendário</h2></header>
+      <label class="switch-row"><span>Abrir A pagar e receber em modo calendário</span><input type="checkbox" role="switch" data-setting="payablesView" ${st.payablesView === 'calendar' ? 'checked' : ''}></label>
+    </article>
+    <article class="card">
+      <header class="card-head"><h2>Empresa</h2></header>
+      <label class="switch-row"><span>Usar também finanças da empresa <small class="muted">(mostra Pessoal/Empresa em contas, cartões e filtros)</small></span><input type="checkbox" role="switch" data-setting="business" ${st.business ? 'checked' : ''}></label>
+    </article>
+    <article class="card">
       <header class="card-head"><h2>Automações</h2></header>
-      <label class="switch-row"><span>Efetivar automaticamente <small class="muted">(contas pendentes viram pagas no vencimento)</small></span><input type="checkbox" role="switch" data-setting="autoPay" ${st.autoPay ? 'checked' : ''}></label>
+      <label class="switch-row"><span>Efetivar automaticamente <small class="muted">(despesas pendentes viram pagas no vencimento; valores a receber continuam em aberto)</small></span><input type="checkbox" role="switch" data-setting="autoPay" ${st.autoPay ? 'checked' : ''}></label>
       <label class="switch-row"><span>Análise inteligente <small class="muted">(avisa quando uma despesa está muito acima da média)</small></span><input type="checkbox" role="switch" data-setting="smartAlert" ${st.smartAlert ? 'checked' : ''}></label>
       <div class="switch-row"><span>Modo viagem ${st.travelTag ? `<small class="muted">· ativo com #${esc(st.travelTag)}</small>` : '<small class="muted">· desativado</small>'}</span><button class="btn ghost sm" data-action="travel">${icon('plane', 16)} ${st.travelTag ? 'Alterar' : 'Ativar'}</button></div>
     </article>
@@ -145,12 +184,29 @@ export function renderSettings() {
       <div class="stack">
         <button class="btn ghost" data-action="backup-export">${icon('database', 18)} Exportar backup (JSON)</button>
         <label class="btn ghost file-btn">${icon('upload', 18)} Restaurar backup<input type="file" accept="application/json,.json" data-input="backup-import" hidden></label>
+        ${undoRestoreButton()}
         <button class="btn ghost" data-action="export-csv" data-scope="all">${icon('download', 18)} Exportar todas as transações (CSV)</button>
         <button class="btn ghost" data-action="demo">${icon('sparkles', 18)} Carregar dados de exemplo</button>
         <button class="btn ghost danger" data-action="reset">${icon('rotate-ccw', 18)} Apagar todos os dados</button>
       </div>
     </article>
     <p class="about">Ruffino Finanças · versão 1.1<br>Lilian Ruffino Consultoria Empresarial</p>
+  </section>`;
+}
+
+// ---------- personalizar a tela inicial ----------
+export function renderHomeBlocks() {
+  const list = homeBlocksOrdered();
+  return `<section>
+    ${pageHead('Personalizar tela inicial', { back: '#/mais' })}
+    <article class="card">
+      <p class="muted small">Escolha o que aparece no Início e use ↑ ↓ para mudar a ordem. A lista segue a ordem da tela.</p>
+      <div class="toolbar"><button class="btn ghost sm" data-action="home-all">${icon('check', 16)} Mostrar tudo</button>
+        <button class="btn ghost sm" data-action="home-reset">${icon('rotate-ccw', 16)} Restaurar padrão</button></div>
+      <ul class="hb-list">${list.map(([key, name, desc], i) => `<li class="hb-row">
+        <label class="switch-row"><span>${name} <small class="muted">(${desc})</small></span><input type="checkbox" role="switch" data-setting="homeBlock" data-key="${key}" ${homeBlockOn(key) ? 'checked' : ''}></label>
+        <span class="hb-move"><button class="icon-btn" data-action="home-move" data-key="${key}" data-dir="-1" aria-label="Subir ${name}" ${i === 0 ? 'disabled' : ''}>${icon('arrow-up', 18)}</button><button class="icon-btn" data-action="home-move" data-key="${key}" data-dir="1" aria-label="Descer ${name}" ${i === list.length - 1 ? 'disabled' : ''}>${icon('arrow-down', 18)}</button></span></li>`).join('')}</ul>
+    </article>
   </section>`;
 }
 
@@ -195,7 +251,71 @@ export function pinPad(title, onDone, { allowCancel = true } = {}) {
   };
 }
 
+/** Confere o PIN atual (mesmo hash do desbloqueio) antes de trocar ou remover. */
+function askCurrentPin(title, next) {
+  const p = pinPad(title, async (pin) => {
+    if ((await sha256(`ruffino:${pin}`)) !== S.settings.pinHash) return false;
+    next();
+    return true;
+  });
+  openSheet(p.html, { onMount: p.mount });
+}
+
+/** Cria (ou troca) o PIN: digita duas vezes. */
+function newPin() {
+  let first = null;
+  const step = (title) => {
+    const p = pinPad(title, async (pin) => {
+      if (!first) {
+        first = pin;
+        step('Confirme o PIN');
+        return true;
+      }
+      if (pin !== first) {
+        first = null;
+        toast('Os PINs não conferem. Tente de novo.');
+        step('Crie um PIN de 4 dígitos');
+        return true;
+      }
+      S.settings.pinHash = await sha256(`ruffino:${pin}`);
+      save();
+      closeSheet();
+      toast('PIN definido.');
+      rerender();
+      return true;
+    });
+    openSheet(p.html, { onMount: p.mount });
+  };
+  step(S.settings.pinHash ? 'Crie o novo PIN de 4 dígitos' : 'Crie um PIN de 4 dígitos');
+}
+
 on({
+  'home-all': () => {
+    S.settings.homeBlocks = Object.fromEntries(HOME_BLOCKS.map(([k]) => [k, true]));
+    save();
+    rerender();
+  },
+  'home-reset': () => {
+    S.settings.homeBlocks = defaultHomeBlocks();
+    delete S.settings.homeOrder;
+    save();
+    toast('Tela inicial no padrão.');
+    rerender();
+  },
+  // troca o bloco de lugar com o vizinho e devolve o foco ao mesmo botão (ou ao outro, se chegou na ponta)
+  'home-move': (el) => {
+    const order = homeBlocksOrdered().map(([k]) => k);
+    const i = order.indexOf(el.dataset.key);
+    const j = i + Number(el.dataset.dir);
+    if (i < 0 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    S.settings.homeOrder = order;
+    save();
+    rerender();
+    const sel = (d) => document.querySelector(`[data-action="home-move"][data-key="${el.dataset.key}"][data-dir="${d}"]`);
+    const b = sel(el.dataset.dir);
+    (b && !b.disabled ? b : sel(-Number(el.dataset.dir)))?.focus();
+  },
   'cat-tab': (el) => ((UI.catTab = el.dataset.v), rerender()),
   'cat-form': (el) => categoryForm(el.dataset.id ? category(el.dataset.id) : null, el.dataset.parent || null),
   theme: (el) => {
@@ -204,36 +324,30 @@ on({
     applyTheme();
     rerender();
   },
-  'pin-set': () => {
-    let first = null;
-    const step = (title) => {
-      const p = pinPad(title, async (pin) => {
-        if (!first) {
-          first = pin;
-          step('Confirme o PIN');
-          return true;
-        }
-        if (pin !== first) {
-          first = null;
-          toast('Os PINs não conferem. Tente de novo.');
-          step('Crie um PIN de 4 dígitos');
-          return true;
-        }
-        S.settings.pinHash = await sha256(`ruffino:${pin}`);
-        save();
-        closeSheet();
-        toast('PIN definido.');
-        rerender();
-        return true;
-      });
-      openSheet(p.html, { onMount: p.mount });
-    };
-    step('Crie um PIN de 4 dígitos');
-  },
-  'pin-remove': async () => {
-    if (!(await confirmSheet({ title: 'Remover o PIN?', text: 'O app abrirá sem pedir senha.', options: [{ label: 'Remover', value: 'yes', danger: true }] }))) return;
-    S.settings.pinHash = null;
-    save();
+  'pin-set': () => (S.settings.pinHash ? askCurrentPin('Digite o PIN atual', newPin) : newPin()),
+  'pin-remove': () =>
+    askCurrentPin('Digite o PIN atual para remover', () => {
+      S.settings.pinHash = null;
+      save();
+      closeSheet();
+      toast('PIN removido. O app abrirá sem pedir senha.');
+      rerender();
+    }),
+  'backup-undo': async () => {
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(RESTORE_KEY) || 'null');
+    } catch {}
+    if (!saved?.data) return toast('Não há restauração para desfazer.');
+    const ok = await confirmSheet({ title: 'Desfazer a restauração?', text: 'Voltar aos dados de antes da restauração? Os dados atuais serão substituídos.', options: [{ label: 'Desfazer restauração', value: 'yes', danger: true }] });
+    if (!ok) return;
+    replaceState(saved.data);
+    try {
+      localStorage.removeItem(RESTORE_KEY);
+    } catch {}
+    applyTheme();
+    toast('Restauração desfeita.');
+    go('#/');
     rerender();
   },
   'backup-export': async () => {
@@ -257,21 +371,67 @@ on({
 
 /** Campos de configuração e restauração de backup (eventos "change"). */
 export function handleSettingChange(el) {
+  if (el.dataset.setting === 'autoPay' && el.checked) return confirmAutoPay(el);
   if (el.dataset.setting === 'name') S.settings.name = el.value.trim();
-  if (['hide', 'autoPay', 'smartAlert'].includes(el.dataset.setting)) S.settings[el.dataset.setting] = el.checked;
+  if (['hide', 'autoPay', 'smartAlert', 'business'].includes(el.dataset.setting)) S.settings[el.dataset.setting] = el.checked;
+  if (el.dataset.setting === 'homeBlock') S.settings.homeBlocks = { ...S.settings.homeBlocks, [el.dataset.key]: el.checked };
+  if (el.dataset.setting === 'payablesView') S.settings.payablesView = el.checked ? 'calendar' : 'list';
   save();
-  if (el.dataset.setting === 'autoPay' && el.checked) toast('Pendências vencidas serão efetivadas automaticamente.');
+}
+
+/** O que a efetivação automática baixaria agora (mesmo critério do applyAutoPay do store). */
+export function autoPayPreview(list = S.transactions, t0 = today()) {
+  const items = list.filter((t) => !t.paid && !t.cardId && (t.type === 'expense' || t.type === 'transfer') && t.date <= t0);
+  return { count: items.length, total: round2(items.reduce((s, t) => s + (Number(t.amount) || 0), 0)) };
+}
+
+/** Ao ligar a efetivação automática: mostra a prévia e só grava se a usuária confirmar. */
+async function confirmAutoPay(el) {
+  const { count, total } = autoPayPreview();
+  const ok = await confirmSheet({
+    title: 'Ligar a efetivação automática?',
+    text: `${count
+      ? `Agora ${count} lançamento(s) pendente(s) (despesas e transferências fora do cartão, com data até hoje) serão marcados como pagos, somando ${money(total)}.`
+      : 'Nenhuma despesa pendente vence até hoje; as próximas serão marcadas como pagas no vencimento.'} Valores a receber nunca são baixados sozinhos: continuam em aberto até você registrar o recebimento.`,
+    options: [{ label: 'Ligar e efetivar', value: 'yes' }],
+  });
+  if (!ok) {
+    el.checked = false;
+    return;
+  }
+  S.settings.autoPay = true;
+  save();
+  toast(count ? `Efetivação automática ligada: ${count} lançamento(s) marcado(s) como pago(s).` : 'Efetivação automática ligada.');
+  rerender(); // o render aplica o applyAutoPay
+}
+
+/** Botão para desfazer a última restauração, se a cópia de antes ainda estiver guardada neste aparelho. */
+function undoRestoreButton() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RESTORE_KEY) || 'null');
+    if (!saved?.at) return '';
+    const d = new Date(saved.at);
+    const p = (n) => String(n).padStart(2, '0');
+    const when = `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    return `<button class="btn ghost" data-action="backup-undo">${icon('rotate-ccw', 18)} Desfazer restauração de ${when}</button>`;
+  } catch {
+    return '';
+  }
 }
 
 export async function importBackup(file) {
   try {
     const data = JSON.parse(await file.text());
     if (!data || !Array.isArray(data.transactions) || !Array.isArray(data.accounts)) throw new Error('formato');
-    const ok = await confirmSheet({ title: 'Restaurar backup?', text: `${data.transactions.length} transações e ${data.accounts.length} contas vão substituir os dados atuais.`, options: [{ label: 'Restaurar', value: 'yes', danger: true }] });
+    const ok = await confirmSheet({ title: 'Restaurar backup?', text: `${data.transactions.length} transações e ${data.accounts.length} contas vão substituir os dados atuais. Os dados atuais ficam guardados neste aparelho e você pode desfazer em Configurações.`, options: [{ label: 'Restaurar', value: 'yes', danger: true }] });
     if (!ok) return;
+    // guarda a cópia de antes, para desfazer a restauração
+    try {
+      localStorage.setItem(RESTORE_KEY, JSON.stringify({ at: new Date().toISOString(), data: S }));
+    } catch {}
     replaceState(data);
     applyTheme();
-    toast('Backup restaurado.');
+    toast('Backup restaurado. Para voltar, use “Desfazer restauração” em Configurações.');
     go('#/');
     rerender();
   } catch {

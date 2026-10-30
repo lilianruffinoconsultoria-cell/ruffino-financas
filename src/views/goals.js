@@ -78,13 +78,19 @@ on({
       <label class="amount-field"><span>Valor</span><div><em>R$</em><input name="amount" inputmode="decimal" placeholder="0,00" autofocus></div></label>
       <label class="field"><span>Data</span><input type="date" name="date" value="${today()}"></label>
       <p class="hint">Saldo guardado: ${$m(goalSaved(g))}. O valor fica registrado só no objetivo; se movimentou dinheiro entre contas, lance também uma transferência.</p>
+      <p class="form-error" role="alert" hidden></p>
       <div class="form-actions"><button class="btn primary">${icon('check', 18)} Confirmar</button></div></form>`, {
       onMount(sheet) {
         const f = sheet.querySelector('form');
+        const er = f.querySelector('.form-error');
+        const fail = (msg) => ((er.textContent = msg), (er.hidden = false));
         f.addEventListener('submit', (e) => {
           e.preventDefault();
-          const amount = parseMoney(f.amount.value);
-          if (!amount) return;
+          const amount = round2(parseMoney(f.amount.value));
+          if (!(amount > 0)) return fail('Informe um valor maior que zero.');
+          // retirada não pode passar do que está guardado
+          const saved = round2(goalSaved(g));
+          if (dir < 0 && amount > saved) return fail(`Você tem ${$m(Math.max(0, saved))} guardados neste objetivo.`);
           g.deposits.push({ date: f.date.value || today(), amount: round2(amount * dir) });
           save();
           closeSheet();

@@ -40,7 +40,7 @@ function splitLine(line, sep) {
 
 /**
  * CSV com colunas de data, descrição e valor (negativo = saída). Aceita também
- * colunas de tipo (Receita/Despesa/Transferência/Reembolso), categoria e tags. Detecta ";" ou "," e o cabeçalho.
+ * colunas de tipo (Receita/Despesa/Transferência/Reembolso), categoria, tags e observação (vira `note`). Detecta ";" ou "," e o cabeçalho.
  */
 export function parseCsv(text) {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
@@ -59,6 +59,7 @@ export function parseCsv(text) {
   const iType = hasHeader ? head.findIndex((h) => /^tipo|type|natureza/.test(h)) : -1;
   const iCat = hasHeader ? head.findIndex((h) => /categ/.test(h)) : -1;
   const iTags = hasHeader ? head.findIndex((h) => /^tags?$|etiqueta/.test(h)) : -1;
+  const iNote = hasHeader ? head.findIndex((h) => /^obs|observa|^nota|^notes?$|detalhe/.test(h)) : -1;
   if (hasHeader) rows = rows.slice(1);
   return rows
     .map((r) => {
@@ -72,6 +73,7 @@ export function parseCsv(text) {
         amount,
         category: iCat >= 0 ? r[iCat] || '' : '',
         type: iType >= 0 ? r[iType] || '' : '',
+        note: iNote >= 0 ? r[iNote] || '' : '',
         tags: iTags >= 0 ? (r[iTags] || '').split(/[\s,]+/).map((t) => t.replace(/^#/, '').toLowerCase()).filter(Boolean) : [],
       };
     })
@@ -102,7 +104,7 @@ export function parseInstallment(desc) {
 }
 
 /** Linha de pagamento da fatura anterior (não é compra nem estorno). */
-export const isInvoicePayment = (desc) => /pagamento (recebido|efetuado|da fatura)|pgto|pagto|^pagamento$/i.test(String(desc || ''));
+export const isInvoicePayment = (desc) => /pagamento (recebido|efetuado|da fatura)|inclus[aã]o de pagamento|pgto|pagto|^pagamento$/i.test(String(desc || ''));
 
 /** OFX (SGML ou XML): cada <STMTTRN> vira uma linha; FITID evita duplicar na reimportação. */
 export function parseOfx(text) {

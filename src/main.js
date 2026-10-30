@@ -1,7 +1,7 @@
 // Ponto de entrada: estrutura da tela, rotas, eventos globais, boas-vindas e bloqueio por PIN.
 import './styles.css';
 import { S, ensureRecurring, applyAutoPay, seedDemo, startFromScratch } from './store.js';
-import { icon, esc, addMonths, thisMonth, sha256, isNative } from './util.js';
+import { icon, esc, addMonths, thisMonth, sha256, isNative, maskMoney } from './util.js';
 import { UI, ACTIONS, on, setRerender, removeSheet, sheetOpen, closeSheet, toast } from './ui.js';
 import { applyTheme } from './theme.js';
 import { LOGO } from './brand.js';
@@ -12,17 +12,17 @@ import { renderPlanning } from './views/planning.js';
 import { renderAccounts, renderCards, renderCardDetail } from './views/accounts.js';
 import { renderGoals } from './views/goals.js';
 import { renderReports } from './views/reports.js';
-import { renderMore, renderCategories, renderSettings, pinPad, handleSettingChange, importBackup } from './views/more.js';
-import { renderCalendar } from './views/calendar.js';
+import { renderMore, renderCategories, renderSettings, renderHomeBlocks, pinPad, handleSettingChange, importBackup } from './views/more.js';
 import { renderTags } from './views/tags.js';
 import { renderImport, handleImportInput } from './views/import.js';
-import { renderInstallments } from './views/installments.js';
+import { renderPayables, handlePayablesInput } from './views/payables.js';
 import { initCloud, onCloudChange, cloudConfigured, cloudInfo, signIn, signUp, resetPassword, syncNow, sessionFromLink } from './sync.js';
 import { openLogin, openNewPassword } from './views/cloud.js';
 
 const ROUTES = [
   [/^#?\/?$/, renderHome, 'home'],
   [/^#\/transacoes$/, renderTransactions, 'tx'],
+  [/^#\/pagar-receber$/, renderPayables, 'pay'],
   [/^#\/planejamento$/, renderPlanning, 'plan'],
   [/^#\/relatorios$/, renderReports, 'reports'],
   [/^#\/mais$/, renderMore, 'more'],
@@ -32,25 +32,34 @@ const ROUTES = [
   [/^#\/objetivos$/, renderGoals, 'more'],
   [/^#\/categorias$/, renderCategories, 'more'],
   [/^#\/config$/, renderSettings, 'more'],
-  [/^#\/calendario$/, renderCalendar, 'more'],
+  [/^#\/personalizar-inicio$/, renderHomeBlocks, 'more'],
   [/^#\/tags$/, renderTags, 'more'],
   [/^#\/importar$/, renderImport, 'more'],
-  [/^#\/parcelamentos$/, renderInstallments, 'inst'],
+  [/^#\/(parcelamentos)$/, renderPayables, 'pay'], // a antiga aba virou a visão Parcelamentos
+  [/^#\/calendario$/, renderCalendarAlias, 'pay'], // o calendário único fica em A pagar e receber
 ];
 
+/** Rota antiga #/calendario: abre A pagar e receber na visão calendário. */
+function renderCalendarAlias() {
+  S.settings.payablesView = 'calendar';
+  history.replaceState(null, '', '#/pagar-receber');
+  return renderPayables();
+}
+
+// [rota, ícone, nome, aba, nome curto na barra inferior]
 const NAV = [
   ['#/', 'house', 'Início', 'home'],
   ['#/transacoes', 'arrow-left-right', 'Transações', 'tx'],
-  ['#/planejamento', 'target', 'Planejamento', 'plan'],
+  ['#/planejamento', 'target', 'Planejamento', 'plan', 'Planejar'],
   ['#/relatorios', 'chart-pie', 'Relatórios', 'reports'],
   ['#/mais', 'ellipsis', 'Mais', 'more'],
-  ['#/parcelamentos', 'handshake', 'Parcelamentos', 'inst'],
+  ['#/pagar-receber', 'calendar-clock', 'A pagar e receber', 'pay', 'A pagar'],
 ];
 
 const app = document.getElementById('app');
 
 function shell() {
-  const tab = (n) => `<a href="${n[0]}" data-tab="${n[3]}">${icon(n[1], 22)}<span>${n[2]}</span></a>`;
+  const tab = (n) => `<a href="${n[0]}" data-tab="${n[3]}">${icon(n[1], 22)}<span>${n[4] || n[2]}</span></a>`;
   return `<div class="shell">
     <aside class="side">
       <a class="brand" href="#/">${LOGO}<span><b>Ruffino</b><em>Finanças</em></span></a>
@@ -61,7 +70,7 @@ function shell() {
     <main id="view" class="view" tabindex="-1"></main>
     <nav class="tabbar" aria-label="Principal">${tab(NAV[0])}${tab(NAV[1])}
       <button class="fab" data-action="quick-add" aria-label="Novo lançamento">${icon('plus', 28)}</button>
-      ${tab(NAV[5])}${tab(NAV[4])}</nav>
+      ${tab(NAV[5])}${tab(NAV[2])}${tab(NAV[4])}</nav>
   </div>`;
 }
 
@@ -128,10 +137,45 @@ document.addEventListener('input', (e) => {
   }
 });
 
+// ---------- máscara de dinheiro (centavos) ----------
+// Vale para todo <input inputmode="decimal"> (exceto data-nomask). Roda na captura, antes dos
+// listeners do próprio formulário, para que eles já leiam o valor formatado.
+const moneyInput = (el) => el?.matches?.('input[inputmode="decimal"]:not([data-nomask])');
+const setMasked = (el, text) => {
+  el.value = text;
+  const end = text.length;
+  el.setSelectionRange?.(end, end);
+};
+document.addEventListener(
+  'input',
+  (e) => {
+    const el = e.target;
+    if (!moneyInput(el)) return;
+    // colar/autocompletar (ou teclado que insere o texto inteiro, ex.: "1.500,00") lê o texto como reais
+    const whole = /^insertFrom|Replacement/.test(e.inputType || '') || (e.data && e.data.length > 1 && /[,.]/.test(e.data));
+    setMasked(el, whole ? maskMoney(e.data || el.value, true) : maskMoney(el.value));
+  },
+  true,
+);
+document.addEventListener(
+  'paste',
+  (e) => {
+    const el = e.target;
+    if (!moneyInput(el)) return;
+    const text = e.clipboardData?.getData('text') || '';
+    e.preventDefault();
+    if (!/\d/.test(text)) return;
+    setMasked(el, maskMoney(text, true));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  },
+  true,
+);
+
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset?.setting) handleSettingChange(el);
   if (el.dataset?.input?.startsWith('import-')) handleImportInput(el);
+  if (el.dataset?.input === 'pr-period') handlePayablesInput(el);
   if (el.dataset?.input === 'backup-import' && el.files?.[0]) {
     importBackup(el.files[0]);
     el.value = '';
@@ -259,7 +303,7 @@ function showOnboardingLocal() {
     <ul class="ob-feats">
       <li>${icon('credit-card', 20)}<span>Contas e cartões com faturas automáticas</span></li>
       <li>${icon('target', 20)}<span>Planejamento mensal por categoria</span></li>
-      <li>${icon('briefcase', 20)}<span>Separação entre finanças pessoais e da empresa</span></li>
+      <li>${icon('wallet', 20)}<span>Suas finanças pessoais num só lugar</span></li>
       <li>${icon('chart-column', 20)}<span>DRE do mês e relatórios</span></li>
     </ul>
     <label class="field"><span>Como podemos te chamar?</span><input id="ob-name" maxlength="30" placeholder="Seu nome" autocomplete="given-name"></label>
@@ -290,7 +334,8 @@ function showLock() {
     start();
     return true;
   }, { allowCancel: false });
-  app.innerHTML = `<div class="lock"><div class="ob-logo sm">${LOGO}</div>${pad.html}</div>`;
+  app.innerHTML = `<div class="lock"><div class="ob-logo sm">${LOGO}</div>${pad.html}
+    <p class="small muted center">Esqueceu o PIN? Entre com sua conta (e-mail e senha) em outro aparelho ou reinstale o app — seus dados ficam salvos na nuvem.</p></div>`;
   const cleanup = pad.mount(app.querySelector('.lock'));
 }
 

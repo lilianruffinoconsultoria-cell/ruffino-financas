@@ -2,9 +2,16 @@
 import { S } from './store.js';
 import { money, esc, icon, monthLabel, thisMonth, round2 } from './util.js';
 
+// escolha do chip Pessoal/Empresa; sem finanças da empresa (settings.business) o filtro efetivo é sempre "tudo"
+let scopeChoice = 'all';
 export const UI = {
   month: thisMonth(),
-  scope: 'all',
+  get scope() {
+    return S.settings.business ? scopeChoice : 'all';
+  },
+  set scope(v) {
+    scopeChoice = v;
+  },
   hide: S.settings.hide,
   txType: 'all',
   txQuery: '',
@@ -36,6 +43,7 @@ export function monthSwitcher() {
 }
 
 export function scopeChips() {
+  if (!S.settings.business) return '';
   const opts = [['all', 'Tudo'], ['pf', 'Pessoal'], ['pj', 'Empresa']];
   return `<div class="chips" role="tablist" aria-label="Escopo">${opts
     .map(([v, l]) => `<button class="chip ${UI.scope === v ? 'on' : ''}" role="tab" aria-selected="${UI.scope === v}" data-action="scope" data-v="${v}">${l}</button>`)
