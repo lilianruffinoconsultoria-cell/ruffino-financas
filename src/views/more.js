@@ -1,4 +1,5 @@
 // Menu "Mais", gestão de categorias e configurações (tema, PIN, backup, dados de exemplo).
+import { flushNow, cloudInfo } from '../sync.js';
 import { S, save, replaceState, resetAll, seedDemo, category, categoryLabel, categoriesOf, subcategoriesOf, COLORS, CATEGORY_TYPES, NEUTRAL_TYPES, HOME_BLOCKS, defaultHomeBlocks, homeBlockOn, homeBlocksOrdered } from '../store.js';
 import { esc, icon, uid, today, saveFile, sha256, money, round2, PICKABLE_ICONS, FEATURES } from '../util.js';
 import { UI, pageHead, catBadge, on, rerender, openSheet, closeSheet, toast, confirmSheet, go } from '../ui.js';
@@ -6,8 +7,13 @@ import { transactionsCsv } from './reports.js';
 import { applyTheme } from '../theme.js';
 import { cloudCard } from './cloud.js';
 
-// cópia dos dados de antes da última restauração de backup (para desfazer)
-const RESTORE_KEY = 'ruffino-financas:antes-restaurar';
+// cópia dos dados de antes da última restauração de backup (para desfazer); fica só na memória, vale até fechar o app
+let undoRestore = null;
+try {
+  localStorage.removeItem('ruffino-financas:antes-restaurar'); // chave antiga: a cópia não fica mais no navegador
+} catch {
+  /* sem armazenamento */
+}
 
 const MENU = [
   ['#/contas', 'landmark', 'Contas', 'Saldos, reajuste, arquivar e mover lançamentos'],
@@ -180,7 +186,7 @@ export function renderSettings() {
     ${cloudCard()}
     <article class="card">
       <header class="card-head"><h2>Dados e backup</h2></header>
-      <p class="muted small">Seus dados ficam guardados neste aparelho e, se a sincronização estiver ligada, também na nuvem. Faça backup com frequência.</p>
+      <p class="muted small">Seus dados ficam na sua conta (nuvem). Os comprovantes (fotos/PDF) ainda NÃO vão para a nuvem: ficam só neste aparelho. Faça backup com frequência.</p>
       <div class="stack">
         <button class="btn ghost" data-action="backup-export">${icon('database', 18)} Exportar backup (JSON)</button>
         <label class="btn ghost file-btn">${icon('upload', 18)} Restaurar backup<input type="file" accept="application/json,.json" data-input="backup-import" hidden></label>
@@ -334,17 +340,12 @@ on({
       rerender();
     }),
   'backup-undo': async () => {
-    let saved = null;
-    try {
-      saved = JSON.parse(localStorage.getItem(RESTORE_KEY) || 'null');
-    } catch {}
+    const saved = undoRestore;
     if (!saved?.data) return toast('Não há restauração para desfazer.');
     const ok = await confirmSheet({ title: 'Desfazer a restauração?', text: 'Voltar aos dados de antes da restauração? Os dados atuais serão substituídos.', options: [{ label: 'Desfazer restauração', value: 'yes', danger: true }] });
     if (!ok) return;
     replaceState(saved.data);
-    try {
-      localStorage.removeItem(RESTORE_KEY);
-    } catch {}
+    undoRestore = null;
     applyTheme();
     toast('Restauração desfeita.');
     go('#/');
@@ -361,8 +362,17 @@ on({
     go('#/');
   },
   reset: async () => {
-    if (!(await confirmSheet({ title: 'Apagar todos os dados?', text: 'Contas, cartões, transações, objetivos e configurações serão apagados deste aparelho. Não dá para desfazer.', options: [{ label: 'Apagar tudo', value: 'yes', danger: true }] }))) return;
+    const cloud = cloudInfo().cloudOnly;
+    if (!(await confirmSheet({ title: 'Apagar todos os dados?', text: cloud ? 'Contas, cartões, transações, objetivos e configurações serão apagados da sua conta. Não dá para desfazer.' : 'Contas, cartões, transações, objetivos e configurações serão apagados deste aparelho. Não dá para desfazer.', options: [{ label: 'Apagar tudo', value: 'yes', danger: true }] }))) return;
+    const before = cloud ? JSON.parse(JSON.stringify(S)) : null;
     resetAll();
+    if (cloud && !(await flushNow())) {
+      // a conta não foi alcançada: devolve os dados e não apaga nada
+      replaceState(before);
+      applyTheme();
+      rerender();
+      return toast('Não foi possível apagar: sem conexão com a sua conta. Nada foi apagado.');
+    }
     applyTheme();
     location.hash = '#/';
     location.reload();
@@ -405,10 +415,10 @@ async function confirmAutoPay(el) {
   rerender(); // o render aplica o applyAutoPay
 }
 
-/** Botão para desfazer a última restauração, se a cópia de antes ainda estiver guardada neste aparelho. */
+/** Botão para desfazer a última restauração, se a cópia de antes ainda estiver na memória. */
 function undoRestoreButton() {
   try {
-    const saved = JSON.parse(localStorage.getItem(RESTORE_KEY) || 'null');
+    const saved = undoRestore;
     if (!saved?.at) return '';
     const d = new Date(saved.at);
     const p = (n) => String(n).padStart(2, '0');
@@ -423,12 +433,10 @@ export async function importBackup(file) {
   try {
     const data = JSON.parse(await file.text());
     if (!data || !Array.isArray(data.transactions) || !Array.isArray(data.accounts)) throw new Error('formato');
-    const ok = await confirmSheet({ title: 'Restaurar backup?', text: `${data.transactions.length} transações e ${data.accounts.length} contas vão substituir os dados atuais. Os dados atuais ficam guardados neste aparelho e você pode desfazer em Configurações.`, options: [{ label: 'Restaurar', value: 'yes', danger: true }] });
+    const ok = await confirmSheet({ title: 'Restaurar backup?', text: `${data.transactions.length} transações e ${data.accounts.length} contas vão substituir os dados atuais. Os dados atuais ficam guardados até você fechar o app e dá para desfazer em Configurações.`, options: [{ label: 'Restaurar', value: 'yes', danger: true }] });
     if (!ok) return;
     // guarda a cópia de antes, para desfazer a restauração
-    try {
-      localStorage.setItem(RESTORE_KEY, JSON.stringify({ at: new Date().toISOString(), data: S }));
-    } catch {}
+    undoRestore = { at: new Date().toISOString(), data: JSON.parse(JSON.stringify(S)) };
     replaceState(data);
     applyTheme();
     toast('Backup restaurado. Para voltar, use “Desfazer restauração” em Configurações.');

@@ -336,6 +336,8 @@ input[type=checkbox][role=switch]:checked::after{transform:translateX(18px)}
 .toast{position:fixed;left:50%;bottom:calc(var(--tabbar-h) + var(--safe-b) + 16px);transform:translate(-50%,20px);opacity:0;pointer-events:none;z-index:60;
   background:#1D1E20;color:#ECEAE4;border:1px solid rgba(197,160,89,.35);padding:10px 16px;border-radius:10px;font-size:14px;font-weight:600;transition:all .25s var(--ease);max-width:calc(100% - 32px);text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
+.offline-bar{position:fixed;top:0;left:0;right:0;z-index:70;padding:calc(var(--safe-t) + 6px) 12px 6px;background:#3A2A1E;color:#F2D9B8;border-bottom:1px solid rgba(197,160,89,.45);font-size:13px;font-weight:600;text-align:center}
+.offline-bar[hidden]{display:none}
 @media (min-width:960px){.toast{bottom:24px}}
 
 /* ---------- boas-vindas e PIN ---------- */

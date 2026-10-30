@@ -2,6 +2,8 @@
 import { uid, round2, sum, today, monthOf, addMonths, shiftDate, monthEnd, dateIn, thisMonth, money } from './util.js';
 
 const KEY = 'ruffino-financas:v1';
+/** Build com Supabase: os dados ficam só na conta (nuvem), nada de financeiro é gravado no navegador. */
+export const CLOUD_ONLY = !!import.meta.env?.VITE_SUPABASE_URL;
 
 export const COLORS = ['#C5A059', '#4CA3A0', '#E07A5F', '#8E7CC3', '#5B9BD5', '#5FAF6E', '#D46A8C', '#E3A73B', '#7F8C9A', '#B5835A', '#3E8E7E', '#C25B56'];
 
@@ -110,13 +112,28 @@ function migrate(data) {
 }
 
 function load() {
+  if (CLOUD_ONLY) return blank(); // começa em branco; os dados chegam da conta depois do login
+  return readLegacyData() || blank();
+}
+
+/** Dados que versões antigas guardaram neste navegador (ou null). Migra o formato, mas não mexe na chave. */
+export function readLegacyData() {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return migrate(JSON.parse(raw));
   } catch (e) {
     console.error('Falha ao ler dados salvos', e);
   }
-  return blank();
+  return null;
+}
+
+/** Apaga a cópia antiga deste navegador. */
+export function clearLegacyData() {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    /* sem armazenamento */
+  }
 }
 
 export let S = load();
@@ -129,11 +146,12 @@ const saveListeners = new Set();
 export const onSave = (fn) => (saveListeners.add(fn), () => saveListeners.delete(fn));
 
 export function save({ silent = false } = {}) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(S));
-  } catch (e) {
-    console.error('Falha ao salvar', e);
-  }
+  if (!CLOUD_ONLY)
+    try {
+      localStorage.setItem(KEY, JSON.stringify(S));
+    } catch (e) {
+      console.error('Falha ao salvar', e);
+    }
   if (!silent) for (const fn of saveListeners) fn();
 }
 

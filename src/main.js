@@ -1,6 +1,6 @@
 // Ponto de entrada: estrutura da tela, rotas, eventos globais, boas-vindas e bloqueio por PIN.
 import './styles.css';
-import { S, ensureRecurring, applyAutoPay, seedDemo, startFromScratch } from './store.js';
+import { S, CLOUD_ONLY, ensureRecurring, applyAutoPay, seedDemo, startFromScratch } from './store.js';
 import { icon, esc, addMonths, thisMonth, sha256, isNative, maskMoney } from './util.js';
 import { UI, ACTIONS, on, setRerender, removeSheet, sheetOpen, closeSheet, toast } from './ui.js';
 import { applyTheme } from './theme.js';
@@ -16,7 +16,7 @@ import { renderMore, renderCategories, renderSettings, renderHomeBlocks, pinPad,
 import { renderTags } from './views/tags.js';
 import { renderImport, handleImportInput } from './views/import.js';
 import { renderPayables, handlePayablesInput } from './views/payables.js';
-import { initCloud, onCloudChange, cloudConfigured, cloudInfo, signIn, signUp, resetPassword, syncNow, sessionFromLink } from './sync.js';
+import { initCloud, onCloudChange, cloudConfigured, cloudInfo, signIn, signUp, signOut, resetPassword, syncNow, sessionFromLink } from './sync.js';
 import { openLogin, openNewPassword } from './views/cloud.js';
 
 const ROUTES = [
@@ -278,7 +278,7 @@ function showOnboarding({ tab = 'login', email = '', notice = '' } = {}) {
         if (!S.settings.onboarded) {
           if (i.state === 'error') throw new Error(i.error);
           await startAccount(name || pendingName(mail));
-        }
+        } else if (!document.getElementById('view') && !document.querySelector('.lock')) enter(); // dados que vieram do navegador antigo
       } else {
         const r = await signUp(mail, pass);
         if (r.confirm) {
@@ -339,11 +339,55 @@ function showLock() {
   const cleanup = pad.mount(app.querySelector('.lock'));
 }
 
+/** Tela de espera enquanto a conta é lida (no modo só nuvem o app nunca decide a tela olhando dados ainda não carregados). */
+function showLoading() {
+  app.innerHTML = `<div class="onboard"><div class="ob-logo">${LOGO}</div><h1>Ruffino <span>Finanças</span></h1><p class="lead center" role="status">Carregando seus dados…</p></div>`;
+}
+
+/** Falha ao ler a conta (sem internet etc.): nunca abre o app vazio. */
+function showLoadError(message) {
+  app.innerHTML = `<div class="onboard"><div class="ob-logo">${LOGO}</div>
+    <h1>Não foi possível carregar seus dados</h1>
+    <p class="lead" role="alert">${esc(message || 'Erro desconhecido.')}</p>
+    <p class="small muted">Seus dados continuam salvos na sua conta. Nada foi alterado.</p>
+    <button class="btn primary block" data-retry>Tentar de novo</button>
+    <button class="btn ghost block" data-leave>Sair</button></div>`;
+  app.querySelector('[data-retry]').addEventListener('click', () => boot());
+  app.querySelector('[data-leave]').addEventListener('click', () => signOut().catch(() => location.reload()));
+}
+
+let booting = false;
+/** Abertura no modo só nuvem: lê a conta e só então decide a tela. */
+async function boot() {
+  booting = true;
+  showLoading();
+  const r = await initCloud();
+  booting = false;
+  if (!r.session) return showOnboarding(linkError ? { notice: LINK_ERROR } : {});
+  if (!r.ok) return showLoadError(r.error);
+  if (linkError) toast(LINK_ERROR);
+  if (S.settings.onboarded) enter();
+  else await startAccount(pendingName(cloudInfo().email || ''));
+  if (linkType === 'recovery') openNewPassword();
+}
+
+// aviso fixo enquanto houver alteração sem enviar por falta de conexão
+const bar = document.createElement('div');
+bar.className = 'offline-bar';
+bar.setAttribute('role', 'status');
+bar.hidden = true;
+bar.textContent = 'Sem conexão: suas alterações ainda não foram salvas';
+document.body.append(bar);
+function updateBar() {
+  const i = cloudInfo();
+  bar.hidden = !(i.cloudOnly && i.signedIn && i.dirty && i.state === 'error');
+}
+
 let cloudStarted = false;
 function start() {
   app.innerHTML = shell();
   render();
-  if (!cloudStarted) {
+  if (!cloudStarted && !CLOUD_ONLY) {
     cloudStarted = true;
     initCloud();
   }
@@ -357,11 +401,15 @@ function enter() {
 }
 // dados novos vindos de outro aparelho: aplica tema e redesenha (ou entra, se ainda estava na boas-vindas)
 onCloudChange((what) => {
-  if (what !== 'data') return;
+  if (what !== 'data') {
+    updateBar();
+    return;
+  }
   applyTheme();
   if (document.getElementById('view')) render({ keepScroll: true });
+  else if (booting) return; // o boot() decide a tela quando a leitura terminar
   else if (S.settings.onboarded && !document.querySelector('.lock')) enter();
-})
+});
 
 window.addEventListener('hashchange', () => {
   if (sheetOpen()) removeSheet();
@@ -380,12 +428,15 @@ const LINK_ERROR =
     ? 'Este link já foi usado ou venceu. Se você já confirmou o e-mail, é só entrar com e-mail e senha.'
     : 'Não foi possível usar o link do e-mail. Entre com e-mail e senha ou peça um link novo.';
 
-if (!S.settings.onboarded) showOnboarding(linkError ? { notice: LINK_ERROR } : {});
+if (CLOUD_ONLY) boot();
+else if (!S.settings.onboarded) showOnboarding(linkError ? { notice: LINK_ERROR } : {});
 else if (S.settings.pinHash) showLock();
 else start();
-if (linkError && S.settings.onboarded) toast(LINK_ERROR);
+if (!CLOUD_ONLY && linkError && S.settings.onboarded) toast(LINK_ERROR);
 
-if (linkType === 'recovery')
+if (CLOUD_ONLY) {
+  /* links do e-mail tratados no boot() */
+} else if (linkType === 'recovery')
   sessionFromLink().then((ok) => {
     if (!ok) return toast('O link de nova senha expirou. Peça outro em “Esqueci minha senha”.');
     // aparelho ainda sem dados: depois da senha nova, baixa a conta (onCloudChange('data') entra no app)

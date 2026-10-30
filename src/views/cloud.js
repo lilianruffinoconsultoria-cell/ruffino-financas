@@ -1,12 +1,13 @@
 // Tela e painéis da sincronização com o Supabase (configuração, login, status e conflito).
-import { cloudInfo, setCloudConfig, signIn, signUp, signOut, syncNow, setConflictHandler, onCloudChange, updatePassword } from '../sync.js';
-import { esc, icon } from '../util.js';
+import { cloudInfo, setCloudConfig, signIn, signUp, signOut, syncNow, flushNow, setConflictHandler, setLegacyHandler, onCloudChange, updatePassword } from '../sync.js';
+import { readLegacyData } from '../store.js';
+import { esc, icon, saveFile, today } from '../util.js';
 import { on, openSheet, closeSheet, toast, confirmSheet, rerender } from '../ui.js';
 
 const time = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
 
 function statusLine(i) {
-  if (!i.signedIn) return '<span class="dot"></span> Desconectado: os dados ficam só neste aparelho';
+  if (!i.signedIn) return i.cloudOnly ? '<span class="dot"></span> Desconectado: entre na sua conta para ver e salvar seus dados' : '<span class="dot"></span> Desconectado: os dados ficam só neste aparelho';
   if (i.state === 'busy') return '<span class="dot busy"></span> Sincronizando…';
   if (i.state === 'error') return `<span class="dot err"></span> <span>${esc(i.error)}</span>`;
   if (i.dirty) return '<span class="dot busy"></span> Alterações aguardando envio';
@@ -22,7 +23,7 @@ export function cloudCard() {
       ? `<p class="muted small">Use o mesmo controle no celular, no computador e no APK. Crie um projeto grátis no Supabase, rode o script <b>supabase/schema.sql</b> e informe a URL e a chave pública do projeto.</p>
          <div class="toolbar"><button class="btn primary sm" data-action="cloud-config">${icon('cloud', 16)} Configurar Supabase</button></div>`
       : `<p class="sync-status">${statusLine(i)}</p>
-         ${i.signedIn ? `<p class="muted small">Conta: <b>${esc(i.email)}</b>. Cada alteração sobe sozinha; ao abrir o app em outro aparelho, ele baixa a versão mais nova. Comprovantes (fotos/PDF) ficam só no aparelho.</p>` : '<p class="muted small">Entre com a mesma conta em todos os aparelhos.</p>'}
+         ${i.signedIn ? `<p class="muted small">Conta: <b>${esc(i.email)}</b>. Seus dados ficam na sua conta: cada alteração sobe sozinha e, em outro aparelho, o app mostra a versão mais nova. Atenção: comprovantes (fotos/PDF) ainda NÃO vão para a nuvem, ficam só neste aparelho.</p>` : '<p class="muted small">Entre com a mesma conta em todos os aparelhos.</p>'}
          <div class="toolbar">
            ${i.signedIn
              ? `<button class="btn primary sm" data-action="cloud-sync">${icon('refresh-cw', 16)} Sincronizar agora</button><button class="btn ghost sm" data-action="cloud-logout">${icon('log-out', 16)} Sair</button>`
@@ -162,6 +163,27 @@ setConflictHandler(async ({ firstTime }) => {
   return choice || 'skip';
 });
 
+// dados antigos que versões anteriores deixaram neste navegador (só perguntado depois do login)
+setLegacyHandler(async ({ cloudHasData, transactions }) => {
+  const choice = await confirmSheet({
+    title: 'Encontramos dados antigos neste navegador',
+    text: cloudHasData
+      ? `Este navegador guarda ${transactions} lançamento(s) de antes, e a sua conta já tem dados. Qual versão deve valer? A outra será descartada.`
+      : `Este navegador guarda ${transactions} lançamento(s) de antes e a sua conta ainda está vazia. Quer enviar esses dados para a sua conta?`,
+    options: cloudHasData
+      ? [{ label: 'Usar os dados da minha conta', value: 'cloud' }, { label: 'Trocar pelos deste navegador', value: 'replace', danger: true }, { label: 'Baixar uma cópia e descartar', value: 'download' }]
+      : [{ label: 'Enviar para minha conta', value: 'send' }, { label: 'Descartar', value: 'discard' }, { label: 'Baixar uma cópia e descartar', value: 'download' }],
+  });
+  if (choice !== 'download') return choice; // null = fechou sem escolher: não apaga nada
+  try {
+    await saveFile(`ruffino-financas-copia-navegador-${today()}.json`, JSON.stringify(readLegacyData(), null, 1), 'application/json');
+  } catch {
+    toast('Não foi possível baixar a cópia. Nada foi apagado.');
+    return null;
+  }
+  return 'discard';
+});
+
 on({
   'cloud-config': () => openCloudConfig(),
   'cloud-login': () => openLogin(),
@@ -171,10 +193,23 @@ on({
     toast(i.state === 'error' ? i.error : 'Sincronizado.');
   },
   'cloud-logout': async () => {
-    const ok = await confirmSheet({ title: 'Sair da nuvem?', text: 'Os dados continuam neste aparelho, mas param de sincronizar até você entrar de novo.', options: [{ label: 'Sair', value: 'yes', danger: true }] });
+    const i = cloudInfo();
+    const ok = await confirmSheet({
+      title: 'Sair da conta?',
+      text: i.cloudOnly ? 'Seus dados continuam salvos na sua conta, mas saem deste aparelho até você entrar de novo. Os comprovantes (fotos/PDF) continuam só neste aparelho.' : 'Os dados continuam neste aparelho, mas param de sincronizar até você entrar de novo.',
+      options: [{ label: 'Sair', value: 'yes', danger: true }],
+    });
     if (!ok) return;
+    if (i.cloudOnly && i.dirty && !(await flushNow())) {
+      const lose = await confirmSheet({
+        title: 'Há alterações não enviadas',
+        text: 'Não foi possível enviar as últimas alterações para a sua conta (sem conexão?). Se sair agora, elas serão perdidas.',
+        options: [{ label: 'Sair e perder as alterações', value: 'yes', danger: true }],
+      });
+      if (!lose) return;
+    }
     await signOut();
-    toast('Sincronização desligada neste aparelho.');
+    toast(i.cloudOnly ? 'Você saiu da conta.' : 'Sincronização desligada neste aparelho.');
   },
 });
 
